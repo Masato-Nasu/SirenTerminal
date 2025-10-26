@@ -1,5 +1,5 @@
-// v6: 強制更新（skipWaiting/clients.claim） & cache bump
-const CACHE_NAME = 'siren-terminal-wiki-v6';
+// v7 cache bump
+const CACHE_NAME = 'siren-terminal-wiki-v7';
 const FILES_TO_CACHE = [
   './index.html',
   './style.css',
@@ -17,12 +17,6 @@ self.addEventListener('activate', event => {
     caches.keys().then(keys => Promise.all(keys.map(k => (k !== CACHE_NAME ? caches.delete(k) : null))))
   );
   self.clients.claim();
-});
-
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
 });
 
 self.addEventListener('fetch', event => {

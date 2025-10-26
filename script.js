@@ -1,5 +1,4 @@
-// v6: 強制更新向けのSW設定を徹底（skipWaiting/clients.claim・cache名v6）
-// クリック可能な関連リンク、ジャンルフィルタ、WIKIオープンなどはv5準拠。
+// v7: Related可視化・リンク化、出力DIV化、オートスクロール、全コントロール正方形UI、SW v7
 
 const output = document.getElementById('output');
 const detailBtn = document.getElementById('detailBtn');
@@ -21,14 +20,14 @@ if (location.protocol === 'file:') banner.hidden = false;
 function log(...args){ console.log("[SirenTerminal]", ...args); }
 
 function escapeHtml(s){ return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-function appendText(text){ output.textContent += text; }
-function appendHTML(html){ output.innerHTML += html; }
+function appendText(text){ output.textContent += text; output.scrollTop = output.scrollHeight; }
+function appendHTML(html){ output.insertAdjacentHTML('beforeend', html); output.scrollTop = output.scrollHeight; }
 
 async function typeWriter(text, speed = 26) {
   return new Promise(resolve => {
     let i = 0;
     const step = () => {
-      if (i < text.length) { output.textContent += text.charAt(i++); setTimeout(step, speed); }
+      if (i < text.length) { output.textContent += text.charAt(i++); output.scrollTop = output.scrollHeight; setTimeout(step, speed); }
       else resolve();
     };
     step();
@@ -45,7 +44,6 @@ function normalizeSummary(data) {
 
 async function fetchRandomSummary() {
   const url = "https://ja.wikipedia.org/api/rest_v1/page/random/summary";
-  log("fetch random:", url);
   const res = await fetch(url, { mode: "cors", headers: { "Accept": "application/json" }, cache: "no-store" });
   if (!res.ok) throw new Error("Wikipedia fetch failed: " + res.status);
   const data = await res.json();
@@ -54,7 +52,6 @@ async function fetchRandomSummary() {
 
 async function fetchRelated(title) {
   const url = "https://ja.wikipedia.org/api/rest_v1/page/related/" + encodeURIComponent(title);
-  log("fetch related:", url);
   const res = await fetch(url, { mode: "cors", headers: { "Accept": "application/json" }, cache: "no-store" });
   if (!res.ok) throw new Error("Wikipedia related fetch failed: " + res.status);
   const data = await res.json();
@@ -69,7 +66,8 @@ const GENRE_TO_CATEGORIES = {
   "芸術": ["芸術"],
   "言語学": ["言語学"],
   "心理学": ["心理学"],
-  "歴史": ["歴史"]
+  "歴史": ["歴史"],
+  "文学": ["文学"]
 };
 
 async function getCategoryMembersForGenre(genre) {
@@ -78,7 +76,6 @@ async function getCategoryMembersForGenre(genre) {
   let titles = [];
   for (const cat of cats) {
     const url = `https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle=${encodeURIComponent('Category:' + cat)}&cmtype=page&cmnamespace=0&cmlimit=500&origin=*`;
-    log("fetch category members:", url);
     const res = await fetch(url, { mode: "cors", cache: "no-store" });
     if (!res.ok) continue;
     const data = await res.json();
@@ -87,7 +84,6 @@ async function getCategoryMembersForGenre(genre) {
   }
   titles = Array.from(new Set(titles));
   categoryCache[genre] = titles;
-  log("cached titles for genre", genre, titles.length);
   return titles;
 }
 
@@ -96,7 +92,6 @@ async function fetchFromGenre(genre) {
   if (!list.length) throw new Error("カテゴリに項目が見つかりません: " + genre);
   const pick = list[Math.floor(Math.random() * list.length)];
   const url = "https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(pick);
-  log("fetch summary by title:", url);
   const res = await fetch(url, { mode: "cors", headers: { "Accept": "application/json" }, cache: "no-store" });
   if (!res.ok) throw new Error("summary fetch failed: " + res.status);
   const data = await res.json();
@@ -113,7 +108,6 @@ async function showOne() {
     await typeWriter(`今日の概念：${current.title}\n\n`);
     await typeWriter(`${current.blurb}`);
   } catch (err) {
-    log("showOne error:", err);
     const fallback = historyBuf.length ? historyBuf[Math.floor(Math.random() * historyBuf.length)] : null;
     output.textContent = "";
     await typeWriter("（オンライン取得に失敗しました。履歴から再提示します）\n\n");
@@ -148,7 +142,6 @@ relatedBtn.addEventListener('click', async () => {
     appendHTML(html);
   } catch (e) {
     appendText(`\n- （関連取得に失敗しました）`);
-    log("related error:", e);
   }
 });
 
@@ -177,14 +170,8 @@ function setupIntervalFromSelect() {
 showOne().then(setupIntervalFromSelect);
 
 // PWA: SW登録 & 更新（localhost/HTTPSのみ）
-if (location.protocol.startsWith('http')) {
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./serviceWorker.js').then(reg => { 
-      if (reg && reg.update) reg.update();
-      // すぐ更新を適用
-      if (reg.waiting) { reg.waiting.postMessage({ type: 'SKIP_WAITING' }); }
-    }).catch(err => log("SW register error:", err));
-  }
+if (location.protocol.startsWith('http') && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./serviceWorker.js').then(reg => { if (reg && reg.update) reg.update(); }).catch(()=>{});
 } else {
   console.warn("Service Workerは https:// または http://localhost でのみ有効です。");
 }
