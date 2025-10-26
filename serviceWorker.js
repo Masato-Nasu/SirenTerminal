@@ -1,28 +1,21 @@
-// v18.4b cache bump
-const CACHE_NAME = 'siren-terminal-genreback-v18-4b';
+// v18.5 cache bump
+const CACHE_NAME = 'siren-terminal-centerui-v18-5';
 const FILES_TO_CACHE = [
   './index.html',
   './style.css',
   './script.js',
   './manifest.json'
 ];
-
-self.addEventListener('install', event => {
+self.addEventListener('install', e => {
   self.skipWaiting();
-  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(FILES_TO_CACHE)));
+  e.waitUntil(caches.open(CACHE_NAME).then(c => c.addAll(FILES_TO_CACHE)));
 });
-self.addEventListener('activate', event => {
-  event.waitUntil(
-    caches.keys().then(keys => Promise.all(keys.map(k => (k !== CACHE_NAME ? caches.delete(k) : null))))
-  );
+self.addEventListener('activate', e => {
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.map(k => (k !== CACHE_NAME ? caches.delete(k) : null)))));
   self.clients.claim();
 });
-self.addEventListener('fetch', event => {
-  const req = event.request;
-  const url = new URL(req.url);
-  if (url.origin !== location.origin) {
-    event.respondWith(fetch(req).catch(() => caches.match('./index.html')));
-    return;
-  }
-  event.respondWith(caches.match(req).then(resp => resp || fetch(req)));
+self.addEventListener('fetch', e => {
+  const req = e.request, url = new URL(req.url);
+  if (url.origin !== location.origin) { e.respondWith(fetch(req).catch(() => caches.match('./index.html'))); return; }
+  e.respondWith(caches.match(req).then(r => r || fetch(req)));
 });

@@ -2,49 +2,49 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Siren Terminal – 中央揃え</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Siren Terminal – Center Panel UI</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <div id="center-wrap">
-    <div id="terminal" role="main">
-      <div id="output" aria-live="polite"></div>
+  <main class="wrap">
+    <canvas id="viz" width="640" height="640" aria-hidden="true"></canvas>
+    <div id="titlebar" class="bar" role="status" aria-live="polite">LOADING…</div>
 
-      <div class="controls-grid">
-        <label class="btn select-wrap" title="ジャンル">
-          <span>ジャンル</span>
-          <select id="genreSel" aria-label="ジャンルを選択">
-            <option value="all" selected>すべて</option>
-            <option value="哲学">哲学</option>
-            <option value="科学">科学</option>
-            <option value="数学">数学</option>
-            <option value="技術">技術</option>
-            <option value="芸術">芸術</option>
-            <option value="言語学">言語学</option>
-            <option value="心理学">心理学</option>
-            <option value="歴史">歴史</option>
-            <option value="文学">文学</option>
-          </select>
-        </label>
-        <button class="btn" id="detailBtn">もっと詳しく</button>
-        <button class="btn" id="relatedBtn">関連を見る</button>
-        <button class="btn" id="openBtn">WIKIを開く</button>
-        <button class="btn" id="nextBtn">今すぐ次へ</button>
-        <button class="btn" id="banBtn">二度と出さない</button>
-        <button class="btn" id="clearBtn">クリア</button>
-      </div>
+    <div class="stack">
+      <label class="btn select-wrap">
+        <span>ジャンル</span>
+        <select id="genreSel" aria-label="ジャンルを選択">
+          <option value="all" selected>すべて</option>
+          <option value="哲学">哲学</option>
+          <option value="科学">科学</option>
+          <option value="数学">数学</option>
+          <option value="技術">技術</option>
+          <option value="芸術">芸術</option>
+          <option value="言語学">言語学</option>
+          <option value="心理学">心理学</option>
+          <option value="歴史">歴史</option>
+          <option value="文学">文学</option>
+        </select>
+      </label>
 
-      <section id="relatedSection" class="related">
-        <div class="related-head">
-          <strong>関連項目</strong>
-          <small id="relatedStatus"></small>
-        </div>
-        <ul id="relatedList"></ul>
-      </section>
+      <button class="btn" id="detailBtn">MORE</button>
+      <button class="btn" id="relatedBtn">RELATED</button>
+      <button class="btn" id="openBtn">OPEN WIKI</button>
+      <button class="btn" id="nextBtn">NEXT</button>
+      <button class="btn warn" id="banBtn">BAN THIS</button>
+      <button class="btn" id="clearBtn">CLEAR</button>
     </div>
-  </div>
+
+    <section id="panel">
+      <div class="panel-head">RELATED</div>
+      <ul id="relatedList"></ul>
+      <div id="detail"></div>
+      <div class="credit">SOURCE: Wikipedia (CC BY-SA / GFDL)</div>
+    </section>
+  </main>
+
   <script src="script.js"></script>
 </body>
 </html>

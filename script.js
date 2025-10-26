@@ -1,6 +1,5 @@
-// v18.4a center UI
-
-const output = document.getElementById('output');
+// v18.5: Center Panel UI + 18.4a engine
+const titlebar = document.getElementById('titlebar');
 const genreSel = document.getElementById('genreSel');
 const detailBtn = document.getElementById('detailBtn');
 const relatedBtn = document.getElementById('relatedBtn');
@@ -8,19 +7,44 @@ const openBtn = document.getElementById('openBtn');
 const nextBtn = document.getElementById('nextBtn');
 const banBtn = document.getElementById('banBtn');
 const clearBtn = document.getElementById('clearBtn');
-const relatedStatus = document.getElementById('relatedStatus');
 const relatedList = document.getElementById('relatedList');
+const detailBox = document.getElementById('detail');
 
+// ===== simple kaleidoscope-like viz =====
+const canvas = document.getElementById('viz');
+const ctx = canvas.getContext('2d');
+let t0 = performance.now();
+function vizStep(){
+  const t = (performance.now()-t0)/1000;
+  const W = canvas.width, H = canvas.height;
+  const img = ctx.createImageData(W,H);
+  for (let y=0; y<H; y++){
+    for (let x=0; x<W; x++){
+      const i = (y*W+x)*4;
+      const nx = (x/W-0.5), ny = (y/H-0.5);
+      const r = Math.hypot(nx,ny);
+      const ang = Math.atan2(ny,nx);
+      const k = Math.sin(12*ang) * Math.cos(40*(r+t*0.05)) + Math.sin(10*(nx*nx-ny*ny)+t*0.8);
+      const g = Math.floor((k*0.5+0.5)*255);
+      img.data[i]=img.data[i+1]=img.data[i+2]=g; img.data[i+3]=255;
+    }
+  }
+  ctx.putImageData(img,0,0);
+  requestAnimationFrame(vizStep);
+}
+requestAnimationFrame(vizStep);
+
+// ====== engine (from 18.4a) ======
 let current = null;
 let inSession = [];
 const SESSION_LIMIT = 500;
 const SEEN_LIMIT = 30000;
-const SEEN_KEY = "siren_seen_titles_v18_4a_set";
-const LAST_KEY = "siren_last_title_v18_4a";
-const CURSOR_KEY_ALL = "siren_cursor_allpages_v18_4a";
-const CURSOR_KEY_CAT_PREFIX = "siren_cursor_cat_v18_4a_";
-const SEED_RING_PREFIX = "siren_seed_ring_v18_4a_";
-const BAN_KEY = "siren_ban_titles_v18_4a_set";
+const SEEN_KEY = "siren_seen_titles_v18_5_set";
+const LAST_KEY = "siren_last_title_v18_5";
+const CURSOR_KEY_ALL = "siren_cursor_allpages_v18_5";
+const CURSOR_KEY_CAT_PREFIX = "siren_cursor_cat_v18_5_";
+const SEED_RING_PREFIX = "siren_seed_ring_v18_5_";
+const BAN_KEY = "siren_ban_titles_v18_5_set";
 const SEED_RING_SIZE = 64;
 const RECENT_EXCLUDE = 200;
 let recentQueue = [];
@@ -64,7 +88,6 @@ function normalizeSummary(data){
   const url = (data.content_urls && data.content_urls.desktop) ? data.content_urls.desktop.page : ("https://ja.wikipedia.org/wiki/" + encodeURIComponent(title));
   return { title, blurb, detail, url };
 }
-
 async function newSeedFor(genre){
   const rnd = crypto.getRandomValues(new Uint32Array(4));
   const parts = [Date.now().toString(16),(performance.now()*1000|0).toString(16),navigator.userAgent||"",rnd.join("-"),Math.random().toString(16)].join("|");
@@ -93,7 +116,7 @@ async function hash32(str){
 
 function pushRecent(title){
   recentQueue.push(title);
-  if (recentQueue.length > 200) recentQueue = recentQueue.slice(-200);
+  if (recentQueue.length > RECENT_EXCLUDE) recentQueue = recentQueue.slice(-RECENT_EXCLUDE);
 }
 
 function acceptableTitle(title){
@@ -178,7 +201,7 @@ async function fetchRelatedRobust(title) {
   return [];
 }
 
-// 科学ミックス（seedシャッフル）
+// science mix
 function pickScienceMix(seedBig){
   const cats = ["科学","数学","技術"];
   const idxs = shuffleWithSeed([0,1,2], seedBig);
@@ -215,15 +238,15 @@ async function pickNext(){
 }
 
 function renderMain(s){
-  output.textContent = `今日の概念：${s.title}\n\n${s.blurb}`;
+  titlebar.textContent = `【 ${s.title} 】 ${s.blurb.replace(/^──/,'— ')}`;
   relatedList.innerHTML = "";
-  relatedStatus.textContent = "";
+  detailBox.textContent = "";
 }
 
 async function showOne(){
   const s = await pickNext();
   if (!s){
-    output.textContent = "（候補が見つかりません。ジャンルを変えるか時間をおいて再試行してください）";
+    titlebar.textContent = "候補が見つかりません。ジャンルを変えるか時間をおいて再試行してください。";
     return;
   }
   current = s;
@@ -236,22 +259,22 @@ async function showOne(){
 
 detailBtn.addEventListener('click', () => {
   if (!current) return;
-  output.textContent += `\n\n[詳細]\n${current.detail}\n\n[出典] ${current.url}`;
+  detailBox.textContent = `${current.detail}\n\n[WIKI] ${current.url}`;
 });
 relatedBtn.addEventListener('click', async () => {
   if (!current) return;
-  relatedStatus.textContent = "読み込み中…"; relatedList.innerHTML = "";
+  relatedList.innerHTML = `<li>loading…</li>`;
   try {
     const rel = await fetchRelatedRobust(current.title);
-    if (!rel.length){ relatedStatus.textContent = "（見つかりませんでした）"; return; }
-    relatedStatus.textContent = `（${rel.length}件）`;
+    if (!rel.length){ relatedList.innerHTML = `<li>(no items)</li>`; return; }
+    relatedList.innerHTML = "";
     rel.slice(0,7).forEach((p,i)=>{
       const li = document.createElement('li');
       li.innerHTML = `[${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${p.title}</a>`;
       relatedList.appendChild(li);
     });
   } catch(e){
-    relatedStatus.textContent = "（取得に失敗しました）";
+    relatedList.innerHTML = `<li>(failed)</li>`;
   }
 });
 openBtn.addEventListener('click', () => {
@@ -259,12 +282,8 @@ openBtn.addEventListener('click', () => {
   if (url) window.open(url, '_blank', 'noopener');
 });
 nextBtn.addEventListener('click', () => { showOne(); });
-banBtn.addEventListener('click', () => {
-  if (!current) return;
-  banSet.add(current.title); saveBan();
-  showOne();
-});
-clearBtn.addEventListener('click', () => { output.textContent = ""; });
+banBtn.addEventListener('click', () => { if (!current) return; banSet.add(current.title); saveBan(); showOne(); });
+clearBtn.addEventListener('click', () => { detailBox.textContent = ""; relatedList.innerHTML = ""; });
 
 setTimeout(()=>{ showOne(); }, 700);
 
