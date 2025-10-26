@@ -237,125 +237,107 @@ function escapeHtml(str){
 
 
 
-// === v19.8 additions: cooldown, circuit breaker, graceful local fallback ===
-const LAST_RUN_KEY = "siren_last_run_v19_8";
-function cooldownOk(ms=1000){
-  const last = Number(localStorage.getItem(LAST_RUN_KEY) || 0);
-  const ok = Date.now() - last >= ms;
-  if (ok) localStorage.setItem(LAST_RUN_KEY, String(Date.now()));
-  return ok;
-}
-
-// circuit breaker: after a failure we enter 'local-only' for a short time
-const CB_KEY = "siren_cb_until_v19_8";
-function inBreaker(){ return Date.now() < Number(localStorage.getItem(CB_KEY) || 0); }
-function tripBreaker(ms=90000){ localStorage.setItem(CB_KEY, String(Date.now()+ms)); }
-function resetBreaker(){ localStorage.removeItem(CB_KEY); }
-
-// local minimal fallback dataset
-const LOCAL_FALLBACK = [
-  { title:"月", blurb:"地球の唯一の自然衛星。", detail:"公転約27.3日。満ち欠けは位置関係で生じる。", url:"https://ja.wikipedia.org/wiki/%E6%9C%88" },
-  { title:"テレミン", blurb:"触れずに演奏する電子楽器。", detail:"手の位置で音程と音量を制御。", url:"https://ja.wikipedia.org/wiki/%E3%83%86%E3%83%AC%E3%83%9F%E3%83%B3" },
-  { title:"反応拡散系", blurb:"模様形成を記述する数理モデル。", detail:"チューリングの提案。縞や斑点を再現。", url:"https://ja.wikipedia.org/wiki/%E5%8F%8D%E5%BF%9C%E6%8B%A1%E6%95%A3%E6%96%B9%E7%A8%8B%E5%BC%8F" }
-];
-
-// keep references created by original file if present
-try{
-  if (typeof titleBox === "undefined") window.titleBox = document.getElementById('title');
-  if (typeof blurbBox === "undefined") window.blurbBox = document.getElementById('blurb');
-}catch{}
-
-// Wrap original fetchJSON to add retries and content-type guard if needed
+// === v19.9 candidate-exhaustion guard (UI非変更) ===
 (function(){
-  const _origFetchJSON = typeof fetchJSON === "function" ? fetchJSON : null;
-  window.fetchJSON = async function(url, opts={}){
-    const o = Object.assign({timeoutMs:8000, retries:2}, opts||{});
-    if (_origFetchJSON){
-      try{ return await _origFetchJSON(url, o); }catch(e){ /* fall through */ }
-    }
-    // generic robust fetch
-    let lastErr=null;
-    for (let a=0; a<=o.retries; a++){
-      const ctrl = new AbortController();
-      const timer = setTimeout(()=>ctrl.abort(), o.timeoutMs);
-      try{
-        const res = await fetch(url + (url.includes('?') ? '&' : '?') + '_=' + Date.now(), {
-          mode:"cors", headers:{ "Accept":"application/json,*/*;q=0.1" }, cache:"no-store", signal:ctrl.signal
-        });
-        clearTimeout(timer);
-        if (!res.ok){ if (res.status===429 || res.status===503){ await new Promise(r=>setTimeout(r, 400*(a+1))); continue; } throw new Error('HTTP '+res.status); }
-        const ct = (res.headers.get('content-type')||'').toLowerCase();
-        if (!ct.includes('application/json')){ await new Promise(r=>setTimeout(r, 400*(a+1))); continue; }
-        const j = await res.json();
-        resetBreaker();
-        return j;
-      }catch(e){
-        clearTimeout(timer);
-        lastErr=e;
-      }
-    }
-    tripBreaker();
-    throw (lastErr || new Error("fetch failed"));
-  };
-})();
+  // 既読のキー名を推測して衝突しないように新設
+  const SEEN_KEY_PATCH = "siren_seen_patch_v19_9";
+  const COUNT_KEY = "siren_next_count_v19_9";
+  const SEEN_MAX = 400;         // スライディング窓
+  const TRIM_TO = 220;
+  const RESET_EVERY = 22;       // 22回ごとに軽く掃除
+  const NG_PHRASE = "候補が見つかりません";
+  const titleBox = document.getElementById("titleBox") || document.getElementById("title") || document.querySelector(".title");
+  const blurbBox = document.getElementById("blurbBox") || document.getElementById("blurb") || document.querySelector(".blurb");
 
-// Provide safe wrappers the original code can call
-window.__sirenLocalPick = function(currentTitle){
-  // pick an item from local fallback that's not the same title if possible
-  const arr = LOCAL_FALLBACK.slice();
-  for (let i=0;i<6;i++){
-    const p = arr[(Math.random()*arr.length)|0];
-    if (!currentTitle || p.title !== currentTitle) return p;
+  function loadJSON(k, d){ try{ return JSON.parse(localStorage.getItem(k) ?? "null") ?? d; }catch{return d;} }
+  function saveJSON(k, v){ localStorage.setItem(k, JSON.stringify(v)); }
+
+  // 既読縮小ヘルパ
+  function pruneSeen(){
+    const arr = loadJSON(SEEN_KEY_PATCH, []);
+    if (arr.length > SEEN_MAX){
+      saveJSON(SEEN_KEY_PATCH, arr.slice(-TRIM_TO));
+    }
   }
-  return arr[0];
-};
+  function pushSeen(title){
+    if (!title) return;
+    const arr = loadJSON(SEEN_KEY_PATCH, []);
+    arr.push(title);
+    saveJSON(SEEN_KEY_PATCH, arr);
+    pruneSeen();
+  }
+  function seenHas(title){
+    const arr = loadJSON(SEEN_KEY_PATCH, []);
+    return arr.includes(title);
+  }
 
-// Patch NEXT/MORE/RELATED handlers if they exist
-(function(){
-  // If original exposed showOne() etc., wrap them to add cooldown+fallback.
+  // ローカル最小辞書（見た目はそのまま）
+  const LOCAL = [
+    { title:"月", blurb:"地球の唯一の自然衛星。", url:"https://ja.wikipedia.org/wiki/%E6%9C%88" },
+    { title:"テレミン", blurb:"触れずに演奏する電子楽器。", url:"https://ja.wikipedia.org/wiki/%E3%83%86%E3%83%AC%E3%83%9F%E3%83%B3" },
+    { title:"反応拡散系", blurb:"模様形成を記述する数理モデル。", url:"https://ja.wikipedia.org/wiki/%E5%8F%8D%E5%BF%9C%E6%8B%A1%E6%95%A3%E6%96%B9%E7%A8%8B%E5%BC%8F" },
+    { title:"色彩理論", blurb:"色の見えと調和の学理。", url:"https://ja.wikipedia.org/wiki/%E8%89%B2%E5%BD%A9%E5%AD%A6" }
+  ];
+  function pickLocal(avoid){
+    for (let i=0;i<8;i++){
+      const p = LOCAL[(Math.random()*LOCAL.length)|0];
+      if ((!avoid || p.title!==avoid) && !seenHas(p.title)) return p;
+    }
+    return LOCAL[0];
+  }
+
+  // NEXTの回数を数え、一定間隔で既読縮小
+  function bumpCounter(){
+    const n = (parseInt(localStorage.getItem(COUNT_KEY)||"0",10) || 0) + 1;
+    localStorage.setItem(COUNT_KEY, String(n));
+    if (n % RESET_EVERY === 0){
+      const arr = loadJSON(SEEN_KEY_PATCH, []);
+      if (arr.length > TRIM_TO) saveJSON(SEEN_KEY_PATCH, arr.slice(-TRIM_TO));
+    }
+  }
+
+  // showOne の出力を監視し、NGなら代替を挿入
   const _showOne = typeof showOne === "function" ? showOne : null;
-  window.showOne = async function(){
-    if (!cooldownOk()) return;
-    if (titleBox && blurbBox){
-      titleBox.textContent = "読み込み中…";
-      blurbBox.textContent = "接続状況を確認しています";
-    }
-    if (inBreaker()){ // local-only
-      const s = __sirenLocalPick();
-      window.current = s;
-      if (titleBox) titleBox.textContent = `【 ${s.title} 】`;
-      if (blurbBox) blurbBox.textContent = s.blurb;
-      return;
-    }
-    try{
-      return await _showOne?.();
-    }catch(e){
-      const s = __sirenLocalPick();
-      window.current = s;
-      if (titleBox) titleBox.textContent = `【 ${s.title} 】`;
-      if (blurbBox) blurbBox.textContent = s.blurb + "（フォールバック）";
-    }
-  };
+  if (_showOne){
+    window.showOne = async function(){
+      bumpCounter();
+      await _showOne();
+      // UIが「候補が見つかりません」または空→ローカル代替を即表示
+      const t = (titleBox?.textContent || "").trim();
+      const b = (blurbBox?.textContent || "").trim();
+      if (!b || (NG_PHRASE && b.includes(NG_PHRASE))){
+        const fb = pickLocal(t);
+        if (titleBox) titleBox.textContent = `【 ${fb.title} 】`;
+        if (blurbBox) blurbBox.textContent = fb.blurb;
+        pushSeen(fb.title);
+      }else if (t) {
+        pushSeen(t.replace(/[【】]/g,""));
+      }
+    };
+  }
 
-  const _related = typeof (relatedBtn?.onclick) === "function" ? relatedBtn.onclick : null;
-  if (relatedBtn){
-    relatedBtn.addEventListener('click', async (ev)=>{
-      if (!cooldownOk()) return;
-      if (inBreaker()){
-        const s = __sirenLocalPick(window.current?.title);
-        window.current = s;
-        if (titleBox) titleBox.textContent = `【 ${s.title} 】`;
-        if (blurbBox) blurbBox.textContent = s.blurb;
-        return;
+  // RELATEDも同様に監視
+  const relBtn = document.getElementById("relBtn") || document.getElementById("relatedBtn");
+  if (relBtn){
+    const orig = relBtn.onclick;
+    relBtn.onclick = async function(ev){
+      bumpCounter();
+      if (typeof orig === "function"){
+        await orig(ev);
+      }else{
+        // 既存リスナーを生かすためclickをそのまま流す
       }
-      try{
-        if (_related) return _related(ev);
-      }catch(e){
-        const s = __sirenLocalPick(window.current?.title);
-        window.current = s;
-        if (titleBox) titleBox.textContent = `【 ${s.title} 】`;
-        if (blurbBox) blurbBox.textContent = s.blurb + "（フォールバック）";
+      const t = (titleBox?.textContent || "").trim();
+      const b = (blurbBox?.textContent || "").trim();
+      if (!b || (NG_PHRASE && b.includes(NG_PHRASE))){
+        const cleanT = t.replace(/[【】]/g,"");
+        const fb = pickLocal(cleanT);
+        if (titleBox) titleBox.textContent = `【 ${fb.title} 】`;
+        if (blurbBox) blurbBox.textContent = fb.blurb;
+        pushSeen(fb.title);
+      }else if (t){
+        pushSeen(t.replace(/[【】]/g,""));
       }
-    }, { once:false });
+    };
   }
 })();
