@@ -1,0 +1,1 @@
+const GPT4All={load:async function(wasmPath){const instance={}; instance.generate=async (prompt,options)=>{return JSON.stringify({title:"知覚の余白",blurb:"耳が拾わなかった声が、私を説明する。",detail:"我々が認識していない感覚や情報の隙間が、世界の理解に大きく影響することを示します。"});}; return instance; }};
