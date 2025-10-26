@@ -237,107 +237,141 @@ function escapeHtml(str){
 
 
 
-// === v19.9 candidate-exhaustion guard (UI非変更) ===
+// === v19.10 anti-exhaustion patch (UI不変更) ===============================
 (function(){
-  // 既読のキー名を推測して衝突しないように新設
-  const SEEN_KEY_PATCH = "siren_seen_patch_v19_9";
-  const COUNT_KEY = "siren_next_count_v19_9";
-  const SEEN_MAX = 400;         // スライディング窓
-  const TRIM_TO = 220;
-  const RESET_EVERY = 22;       // 22回ごとに軽く掃除
-  const NG_PHRASE = "候補が見つかりません";
-  const titleBox = document.getElementById("titleBox") || document.getElementById("title") || document.querySelector(".title");
-  const blurbBox = document.getElementById("blurbBox") || document.getElementById("blurb") || document.querySelector(".blurb");
+  const titleEl = document.getElementById("titleBox") || document.getElementById("title") || document.querySelector(".title");
+  const blurbEl = document.getElementById("blurbBox") || document.getElementById("blurb") || document.querySelector(".blurb");
+  const relBtn  = document.getElementById("relBtn") || document.getElementById("relatedBtn");
+  const nextBtn = document.getElementById("nextBtn") || document.getElementById("next");
 
-  function loadJSON(k, d){ try{ return JSON.parse(localStorage.getItem(k) ?? "null") ?? d; }catch{return d;} }
-  function saveJSON(k, v){ localStorage.setItem(k, JSON.stringify(v)); }
-
-  // 既読縮小ヘルパ
-  function pruneSeen(){
-    const arr = loadJSON(SEEN_KEY_PATCH, []);
-    if (arr.length > SEEN_MAX){
-      saveJSON(SEEN_KEY_PATCH, arr.slice(-TRIM_TO));
-    }
-  }
-  function pushSeen(title){
-    if (!title) return;
-    const arr = loadJSON(SEEN_KEY_PATCH, []);
-    arr.push(title);
-    saveJSON(SEEN_KEY_PATCH, arr);
-    pruneSeen();
-  }
-  function seenHas(title){
-    const arr = loadJSON(SEEN_KEY_PATCH, []);
-    return arr.includes(title);
-  }
-
-  // ローカル最小辞書（見た目はそのまま）
+  const NG = "候補が見つかりません";
+  const COUNT_KEY = "siren_v19_10_count";
+  const SEEN_KEY  = "siren_v19_10_seen";
+  const HISTORY_KEY = "siren_v19_10_hist";
+  const MAX_HISTORY = 6;   // 直近重複チェック用
+  const SOFT_SEEN_LIMIT = 180;
+  const HARD_RESET_EVERY = 21; // 21回ごとに既読を半分に
   const LOCAL = [
     { title:"月", blurb:"地球の唯一の自然衛星。", url:"https://ja.wikipedia.org/wiki/%E6%9C%88" },
     { title:"テレミン", blurb:"触れずに演奏する電子楽器。", url:"https://ja.wikipedia.org/wiki/%E3%83%86%E3%83%AC%E3%83%9F%E3%83%B3" },
     { title:"反応拡散系", blurb:"模様形成を記述する数理モデル。", url:"https://ja.wikipedia.org/wiki/%E5%8F%8D%E5%BF%9C%E6%8B%A1%E6%95%A3%E6%96%B9%E7%A8%8B%E5%BC%8F" },
     { title:"色彩理論", blurb:"色の見えと調和の学理。", url:"https://ja.wikipedia.org/wiki/%E8%89%B2%E5%BD%A9%E5%AD%A6" }
   ];
+
+  function jget(k,d){ try{ return JSON.parse(localStorage.getItem(k) ?? "null") ?? d; }catch{return d;} }
+  function jset(k,v){ localStorage.setItem(k, JSON.stringify(v)); }
+
+  function pushSeen(title){
+    if (!title) return;
+    const seen = jget(SEEN_KEY, []);
+    seen.push(title);
+    // 緩やかに上限
+    if (seen.length > SOFT_SEEN_LIMIT){
+      jset(SEEN_KEY, seen.slice(-Math.floor(SOFT_SEEN_LIMIT*0.6)));
+    }else{
+      jset(SEEN_KEY, seen);
+    }
+  }
+  function wasSeen(title){
+    const seen = jget(SEEN_KEY, []);
+    return seen.includes(title);
+  }
+  function pushHist(title){
+    const h = jget(HISTORY_KEY, []);
+    h.push(title);
+    jset(HISTORY_KEY, h.slice(-MAX_HISTORY));
+  }
+  function lastRepeated(title){
+    const h = jget(HISTORY_KEY, []);
+    let c=0;
+    for (let i=h.length-1; i>=0; i--){
+      if (h[i]===title) c++; else break;
+    }
+    return c>=2; // 同じのが連続で2回以上
+  }
+
+  function bumpCounterAndMaybeTrim(){
+    const n = (parseInt(localStorage.getItem(COUNT_KEY)||"0",10) || 0) + 1;
+    localStorage.setItem(COUNT_KEY, String(n));
+    if (n % HARD_RESET_EVERY === 0){
+      const seen = jget(SEEN_KEY, []);
+      if (seen.length > 0) jset(SEEN_KEY, seen.slice(-Math.ceil(seen.length/2))); // 半分に
+    }
+  }
+
+  // オンラインから強制取得（最終手段）
+  async function forceRandomOnline(){
+    try{
+      const res = await fetch("https://ja.wikipedia.org/api/rest_v1/page/random/summary?redirect=true", {
+        headers: { "Accept": "application/json" }, cache:"no-store"
+      });
+      const ct = (res.headers.get("content-type")||"").toLowerCase();
+      if (!res.ok || !ct.includes("application/json")) throw new Error("bad");
+      const d = await res.json();
+      return { title: d.title, blurb: d.extract || "", url: d?.content_urls?.desktop?.page || "" };
+    }catch{ return null; }
+  }
   function pickLocal(avoid){
     for (let i=0;i<8;i++){
       const p = LOCAL[(Math.random()*LOCAL.length)|0];
-      if ((!avoid || p.title!==avoid) && !seenHas(p.title)) return p;
+      if (p.title !== avoid && !wasSeen(p.title)) return p;
     }
     return LOCAL[0];
   }
 
-  // NEXTの回数を数え、一定間隔で既読縮小
-  function bumpCounter(){
-    const n = (parseInt(localStorage.getItem(COUNT_KEY)||"0",10) || 0) + 1;
-    localStorage.setItem(COUNT_KEY, String(n));
-    if (n % RESET_EVERY === 0){
-      const arr = loadJSON(SEEN_KEY_PATCH, []);
-      if (arr.length > TRIM_TO) saveJSON(SEEN_KEY_PATCH, arr.slice(-TRIM_TO));
+  function readUI(){
+    const t = (titleEl?.textContent || "").replace(/[【】]/g,"").trim();
+    const b = (blurbEl?.textContent || "").trim();
+    return {t,b};
+  }
+  function paint(item, fallback=false){
+    if (!item) return;
+    if (titleEl) titleEl.textContent = `【 ${item.title} 】`;
+    if (blurbEl) blurbEl.textContent = item.blurb + (fallback ? "（フォールバック）" : "");
+    pushSeen(item.title);
+    pushHist(item.title);
+  }
+
+  async function guardAfterRun(){
+    const {t,b} = readUI();
+    // NG文言 or 空 or 直近重複なら救済
+    if (!b || (NG && b.includes(NG)) || lastRepeated(t)){
+      // まずオンラインで強制ランダム（失敗ならローカル）
+      const on = await forceRandomOnline();
+      if (on && !wasSeen(on.title)){
+        paint(on, false);
+        return;
+      }
+      const loc = pickLocal(t);
+      paint(loc, true);
+    }else if (t){
+      pushSeen(t);
+      pushHist(t);
     }
   }
 
-  // showOne の出力を監視し、NGなら代替を挿入
+  // wrap showOne
   const _showOne = typeof showOne === "function" ? showOne : null;
   if (_showOne){
     window.showOne = async function(){
-      bumpCounter();
+      bumpCounterAndMaybeTrim();
       await _showOne();
-      // UIが「候補が見つかりません」または空→ローカル代替を即表示
-      const t = (titleBox?.textContent || "").trim();
-      const b = (blurbBox?.textContent || "").trim();
-      if (!b || (NG_PHRASE && b.includes(NG_PHRASE))){
-        const fb = pickLocal(t);
-        if (titleBox) titleBox.textContent = `【 ${fb.title} 】`;
-        if (blurbBox) blurbBox.textContent = fb.blurb;
-        pushSeen(fb.title);
-      }else if (t) {
-        pushSeen(t.replace(/[【】]/g,""));
-      }
+      await guardAfterRun();
     };
   }
-
-  // RELATEDも同様に監視
-  const relBtn = document.getElementById("relBtn") || document.getElementById("relatedBtn");
+  // wrap RELATED button (onClick/handlerは状況により異なるため、クリック後にガードだけ発火)
   if (relBtn){
-    const orig = relBtn.onclick;
-    relBtn.onclick = async function(ev){
-      bumpCounter();
-      if (typeof orig === "function"){
-        await orig(ev);
-      }else{
-        // 既存リスナーを生かすためclickをそのまま流す
-      }
-      const t = (titleBox?.textContent || "").trim();
-      const b = (blurbBox?.textContent || "").trim();
-      if (!b || (NG_PHRASE && b.includes(NG_PHRASE))){
-        const cleanT = t.replace(/[【】]/g,"");
-        const fb = pickLocal(cleanT);
-        if (titleBox) titleBox.textContent = `【 ${fb.title} 】`;
-        if (blurbBox) blurbBox.textContent = fb.blurb;
-        pushSeen(fb.title);
-      }else if (t){
-        pushSeen(t.replace(/[【】]/g,""));
-      }
-    };
+    relBtn.addEventListener("click", ()=>{
+      bumpCounterAndMaybeTrim();
+      setTimeout(()=>{ guardAfterRun(); }, 40);
+    });
+  }
+  // NEXTボタンが別実装でもガード発火
+  if (nextBtn){
+    nextBtn.addEventListener("click", ()=>{
+      bumpCounterAndMaybeTrim();
+      setTimeout(()=>{ guardAfterRun(); }, 40);
+    });
   }
 })();
+// === end v19.10 patch =======================================================
