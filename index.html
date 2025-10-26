@@ -1,46 +1,48 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Siren Terminal</title>
-  <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#000000">
-  <link rel="icon" href="icon-192.png" sizes="192x192">
-  <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="stylesheet" href="style.css">
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <header>
-    <h1>📚 Siren Terminal</h1>
-    <p class="sub">Wikipedia から話題を一つ拾って短く表示します</p>
-  </header>
-
-  <main id="main">
-    <div class="card">
-      <div id="titleBox" class="title">—</div>
-      <div id="blurbBox" class="blurb">NEXT を押してください。</div>
-      <div class="actions">
-        <button id="nextBtn">NEXT</button>
-        <button id="moreBtn">MORE</button>
-        <button id="relBtn">RELATED</button>
-        <button id="openBtn">OPEN WIKI</button>
-        <button id="clearBtn" class="secondary">CLEAR</button>
+  <main class="wrap">
+    <section id="screen" aria-live="polite">
+      <div id="maintext">
+        <div id="title" class="ttl">起動中…</div>
+        <div id="blurb" class="blurb">読み込み中</div>
       </div>
+      <div id="altview" hidden></div>
+    </section>
+
+    <div class="stack">
+      <div class="select-wrap btn" id="genreWrap">
+        <span class="select-label">GENRE</span>
+        <select id="genreSel" aria-label="ジャンルを選択">
+          <option value="all" selected>すべて</option>
+          <option value="哲学">哲学</option>
+          <option value="科学">科学</option>
+          <option value="数学">数学</option>
+          <option value="技術">技術</option>
+          <option value="芸術">芸術</option>
+          <option value="言語学">言語学</option>
+          <option value="心理学">心理学</option>
+          <option value="歴史">歴史</option>
+          <option value="文学">文学</option>
+        </select>
+      </div>
+
+      <button class="btn red" id="nextBtn">NEXT</button>
+      <button class="btn" id="detailBtn">MORE</button>
+      <button class="btn" id="relatedBtn">RELATED</button>
+      <button class="btn" id="openBtn">OPEN WIKI</button>
+      <button class="btn" id="clearBtn">CLEAR</button>
+      <button class="btn" id="backBtn" hidden>BACK</button>
     </div>
   </main>
 
-  <footer>
-    <small>v19.6 • 長押しCLEARでメモリ初期化 / 連打保護</small>
-  </footer>
-
   <script src="script.js"></script>
-  <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./serviceWorker.js');
-      });
-    }
-  </script>
 </body>
 </html>
