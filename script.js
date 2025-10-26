@@ -1,5 +1,6 @@
-// v18.8: genre-pure selection + square screen + no animation/ban + time-seeded randomness
+// v18.9: monochrome, centered main text in square, genre-pure + time seed + no repeat
 const titleBox = document.getElementById('title');
+const blurbBox = document.getElementById('blurb');
 const genreSel = document.getElementById('genreSel');
 const detailBtn = document.getElementById('detailBtn');
 const relatedBtn = document.getElementById('relatedBtn');
@@ -10,7 +11,7 @@ const relatedList = document.getElementById('relatedList');
 const detailBox = document.getElementById('detail');
 
 let current = null;
-const SEEN_KEY = "siren_seen_titles_v18_8";
+const SEEN_KEY = "siren_seen_titles_v18_9";
 const SEEN_LIMIT = 100000;
 let seenSet = new Set(loadJSON(SEEN_KEY, []));
 
@@ -53,13 +54,12 @@ async function fetchJSON(url){
 }
 function normalizeSummary(data){
   const title = data.title || "（無題）";
-  const blurb = data.description ? `──${data.description}` : (data.extract ? ("──" + data.extract.split("。")[0] + "。") : "──（概要なし）");
+  const blurb = data.description ? `${data.description}` : (data.extract ? (data.extract.split("。")[0] + "。") : "（概要なし）");
   const detail = data.extract || "（詳細なし）";
   const url = (data.content_urls && data.content_urls.desktop) ? data.content_urls.desktop.page : ("https://ja.wikipedia.org/wiki/" + encodeURIComponent(title));
   return { title, blurb, detail, url };
 }
 
-// ===== ジャンル別：Category:◯◯ からのみ取得 =====
 async function fetchCategoryBatch(catTitle, cmcontinue=""){
   const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle=" + encodeURIComponent("Category:"+catTitle) + "&cmtype=page&cmnamespace=0&cmlimit=100&origin=*" + (cmcontinue ? "&cmcontinue="+encodeURIComponent(cmcontinue) : "");
   const data = await fetchJSON(url);
@@ -69,7 +69,6 @@ async function fetchCategoryBatch(catTitle, cmcontinue=""){
 }
 
 async function getTitlesByGenre(genre, seed){
-  // 1〜7ステップランダム前進して100件取得
   let cont = "";
   const steps = Number((seed & 0xffn) % 7n) + 1;
   for (let i=0;i<steps;i++){
@@ -83,13 +82,11 @@ async function getTitlesByGenre(genre, seed){
   shuffleWithSeed(titles, seed);
   return titles;
 }
-
 async function getRandomTitles(limit=40){
   const data = await fetchJSON("https://ja.wikipedia.org/w/api.php?action=query&format=json&list=random&rnnamespace=0&rnlimit="+limit+"&origin=*");
   const arr = (data.query && data.query.random) ? data.query.random : [];
   return arr.map(x => x.title);
 }
-
 async function fetchSummaryByTitle(title){
   const data = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(title));
   return normalizeSummary(data);
@@ -133,31 +130,46 @@ async function pickNew(){
 }
 
 function renderMain(s){
-  titleBox.textContent = `【 ${s.title} 】 ${s.blurb.replace(/^──/,'— ')}`;
+  titleBox.textContent = `【 ${s.title} 】`;
+  blurbBox.textContent = s.blurb;
   relatedList.innerHTML = "";
   detailBox.textContent = "";
 }
 
 async function showOne(){
   const s = await pickNew();
-  if (!s){ titleBox.textContent = "（候補が見つかりません。ジャンルを変えるか時間をおいて再試行してください）"; return; }
+  if (!s){ titleBox.textContent = "（候補が見つかりません）"; blurbBox.textContent="時間をおいて再試行してください。"; return; }
   current = s;
   seenSet.add(s.title); saveSeen();
   renderMain(s);
 }
 
-detailBtn.addEventListener('click', () => { if (!current) return; detailBox.textContent = `${current.detail}\n\n[WIKI] ${current.url}`; });
+detailBtn.addEventListener('click', () => {
+  if (!current) return;
+  detailBox.textContent = `${current.detail}\n\n[WIKI] ${current.url}`;
+});
 relatedBtn.addEventListener('click', async () => {
   if (!current) return;
   relatedList.innerHTML = `<li>loading…</li>`;
-  try { const rel = await fetchRelatedRobust(current.title);
-    relatedList.innerHTML = rel.length ? "" : "<li>(no items)</li>";
-    rel.slice(0,7).forEach((p,i)=>{ const li=document.createElement('li'); li.innerHTML=`[${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${p.title}</a>`; relatedList.appendChild(li); });
-  } catch{ relatedList.innerHTML = "<li>(failed)</li>"; }
+  try {
+    const rel = await fetchRelatedRobust(current.title);
+    if (!rel.length){ relatedList.innerHTML = `<li>(no items)</li>`; return; }
+    relatedList.innerHTML = "";
+    rel.slice(0,7).forEach((p,i)=>{
+      const li = document.createElement('li');
+      li.innerHTML = `[${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${p.title}</a>`;
+      relatedList.appendChild(li);
+    });
+  } catch(e){
+    relatedList.innerHTML = `<li>(failed)</li>`;
+  }
 });
-openBtn.addEventListener('click', () => { const url = current?.url || (current?.title ? "https://ja.wikipedia.org/wiki/" + encodeURIComponent(current.title) : null); if (url) window.open(url,'_blank','noopener'); });
+openBtn.addEventListener('click', () => {
+  const url = current?.url || (current?.title ? "https://ja.wikipedia.org/wiki/" + encodeURIComponent(current.title) : null);
+  if (url) window.open(url, '_blank', 'noopener');
+});
 nextBtn.addEventListener('click', () => { showOne(); });
-clearBtn.addEventListener('click', () => { relatedList.innerHTML=""; detailBox.textContent=""; });
+clearBtn.addEventListener('click', () => { relatedList.innerHTML = ""; detailBox.textContent = ""; });
 
 setTimeout(()=>{ showOne(); }, 400);
 

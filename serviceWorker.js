@@ -1,5 +1,5 @@
-// v18.8 cache bump
-const CACHE_NAME = 'siren-terminal-v18-8';
+// v18.9 cache bump
+const CACHE_NAME = 'siren-terminal-v18-9';
 const FILES_TO_CACHE = [
   './index.html','./style.css','./script.js','./manifest.json'
 ];

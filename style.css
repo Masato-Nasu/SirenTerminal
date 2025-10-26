@@ -1,39 +1,47 @@
 *{box-sizing:border-box}
-:root{color-scheme:dark;--fg:#00ff00;--bg:#000;--line:#00ff00;--btnfg:#111;--btnbg:#f7f7f7}
+:root{color-scheme:dark}
 html,body{height:100%}
-body{margin:0;background:#000;color:var(--fg);font:16px/1.5 'IBM Plex Mono','Courier New',ui-monospace,monospace;display:grid;place-items:center}
-.wrap{width:min(760px,94vw);display:grid;gap:14px;justify-items:center}
-
-/* 正方形スクリーン */
-#screen{
-  width:min(94vw,760px);
-  aspect-ratio:1/1;              /* ←正方形 */
-  border:2px solid var(--line);
+body{
+  margin:0;
   background:#000;
-  color:var(--fg);
-  display:flex;
-  flex-direction:column;
-  align-items:center;
-  justify-content:flex-start;
-  padding:14px;
-  gap:8px;
-  text-align:center;
-  overflow:auto;
+  color:#fff;
+  font:16px/1.6 'IBM Plex Mono','Courier New',ui-monospace,monospace;
+  display:grid;place-items:center;
 }
-#title{font-weight:600;letter-spacing:.06em}
-#detail{white-space:pre-wrap}
-#relatedList{list-style:none;margin:0;padding:0}
-#relatedList li{margin:2px 0}
-.credit{opacity:.75;font-size:12px;margin-top:auto}
+.wrap{width:min(820px,94vw);display:grid;gap:14px;justify-items:center}
+
+/* 正方形スクリーン（黒地に白文字） */
+#screen{
+  width:min(94vw,820px);
+  aspect-ratio:1/1;
+  border:2px solid #fff;
+  display:flex;
+  align-items:center;           /* 縦中央 */
+  justify-content:center;       /* 横中央 */
+  padding:16px;
+  text-align:center;
+  background:#000;
+  color:#fff;
+}
+#maintext{max-width:90%;}
+.ttl{font-weight:700;font-size:clamp(18px,3.6vw,28px);letter-spacing:.06em;margin-bottom:8px}
+.blurb{opacity:.9;font-size:clamp(14px,2.8vw,18px)}
 
 .stack{width:100%;display:grid;gap:10px}
 .btn{
   width:100%;height:48px;
-  border:2px solid var(--line);background:transparent;color:var(--fg);
+  border:2px solid #fff;background:transparent;color:#fff;
   letter-spacing:.08em
 }
-.btn:hover{background:rgba(0,255,0,.08)}
+.btn:hover{background:rgba(255,255,255,.08)}
 .select-wrap{position:relative;display:grid;place-items:center}
 .select-wrap>span{pointer-events:none}
 .select-wrap select{position:absolute;inset:0;opacity:0;cursor:pointer}
-a{color:var(--fg);text-decoration:underline}
+
+#panel{width:100%;border:2px solid #fff;padding:10px;color:#fff}
+.panel-head{text-align:center;margin-bottom:6px;letter-spacing:.12em}
+#relatedList{list-style:none;margin:0 0 8px 0;padding:0;text-align:center}
+#relatedList li{margin:4px 0}
+#detail{white-space:pre-wrap;text-align:center}
+.credit{opacity:.75;text-align:center;margin-top:8px;font-size:12px}
+a{color:inherit;text-decoration:underline}
