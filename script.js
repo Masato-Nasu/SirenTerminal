@@ -12,7 +12,7 @@ const maintext = document.getElementById('maintext');
 const altview = document.getElementById('altview');
 
 let current = null;
-const SEEN_KEY = "siren_seen_titles_v19_1";
+const SEEN_KEY = "siren_seen_titles_v19_3";
 const SEEN_LIMIT = 100000;
 let seenSet = new Set(loadJSON(SEEN_KEY, []));
 

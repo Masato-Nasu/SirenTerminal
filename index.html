@@ -18,8 +18,9 @@
     </section>
 
     <div class="stack">
-      <label class="btn select-wrap">
-        <span>GENRE</span>
+      <!-- カスタムセレクト（見た目はボタンと同一） -->
+      <div class="select-wrap btn" id="genreWrap">
+        <span class="select-label">GENRE</span>
         <select id="genreSel" aria-label="ジャンルを選択">
           <option value="all" selected>すべて</option>
           <option value="哲学">哲学</option>
@@ -32,7 +33,7 @@
           <option value="歴史">歴史</option>
           <option value="文学">文学</option>
         </select>
-      </label>
+      </div>
 
       <button class="btn red" id="nextBtn">NEXT</button>
       <button class="btn" id="detailBtn">MORE</button>
