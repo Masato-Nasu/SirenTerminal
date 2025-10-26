@@ -1,4 +1,4 @@
-// v18.3: 高エントロピーSeed＋再利用禁止＋seededシャッフル。ジャンル/関連はv18.2相当。
+// v18.4: Seed/シャッフル/前進・ミックス・除外キューで偏り解消
 
 const output = document.getElementById('output');
 const genreSel = document.getElementById('genreSel');
@@ -13,18 +13,15 @@ const relatedList = document.getElementById('relatedList');
 let current = null;
 let inSession = [];
 const SESSION_LIMIT = 500;
-const SEEN_LIMIT = 20000; // 拡張
-const SEEN_KEY = "siren_seen_titles_v18_3_set";
-const LAST_KEY = "siren_last_title_v18_3";
-const CURSOR_KEY_ALL = "siren_cursor_allpages_v18_3";
-const CURSOR_KEY_CAT_PREFIX = "siren_cursor_cat_v18_3_";
-const ROUND_KEY = "siren_round_robin_idx_v18_3";
-const SEED_RING_PREFIX = "siren_seed_ring_v18_3_"; // + genre
-const SEED_COUNTER_PREFIX = "siren_seed_counter_v18_3_"; // + genre
+const SEEN_LIMIT = 30000;
+const SEEN_KEY = "siren_seen_titles_v18_4_set";
+const LAST_KEY = "siren_last_title_v18_4";
+const CURSOR_KEY_ALL = "siren_cursor_allpages_v18_4";
+const CURSOR_KEY_CAT_PREFIX = "siren_cursor_cat_v18_4_";
+const SEED_RING_PREFIX = "siren_seed_ring_v18_4_";
 const SEED_RING_SIZE = 64;
-
-let seenSet = new Set(loadSeen());
-let lastTitle = loadLast();
+const RECENT_EXCLUDE = 20;
+let recentQueue = [];
 
 function loadSeen(){ try { return JSON.parse(localStorage.getItem(SEEN_KEY) || "[]"); } catch { return []; } }
 function saveSeen(){
@@ -41,8 +38,11 @@ function saveLast(t){ try { localStorage.setItem(LAST_KEY, t || ""); } catch {} 
 function getCursorKeyForGenre(genre){ return genre === "all" ? CURSOR_KEY_ALL : (CURSOR_KEY_CAT_PREFIX + genre); }
 function loadCursor(genre){ try { return localStorage.getItem(getCursorKeyForGenre(genre)) || ""; } catch { return ""; } }
 function saveCursor(genre, cont){ try { localStorage.setItem(getCursorKeyForGenre(genre), cont || ""); } catch {} }
-function getRound(){ try { return parseInt(localStorage.getItem(ROUND_KEY) || "0", 10) || 0; } catch { return 0; } }
-function setRound(v){ try { localStorage.setItem(ROUND_KEY, String(v)); } catch {} }
+function loadSeedRing(genre){ try { return JSON.parse(localStorage.getItem(SEED_RING_PREFIX + genre) || "[]"); } catch { return []; } }
+function saveSeedRing(genre, arr){ try { localStorage.setItem(SEED_RING_PREFIX + genre, JSON.stringify(arr.slice(-SEED_RING_SIZE))); } catch {} }
+
+let seenSet = new Set(loadSeen());
+let lastTitle = loadLast();
 
 function bust(u){ const sep = u.includes('?') ? '&' : '?'; return `${u}${sep}t=${Date.now()}`; }
 async function fetchJSON(url){
@@ -60,54 +60,20 @@ function normalizeSummary(data){
   return { title, blurb, detail, url };
 }
 
-// ===== 高エントロピーSeed生成 & 再利用禁止 =====
-function loadSeedRing(genre){
-  try { return JSON.parse(localStorage.getItem(SEED_RING_PREFIX + genre) || "[]"); } catch { return []; }
-}
-function saveSeedRing(genre, arr){
-  try { localStorage.setItem(SEED_RING_PREFIX + genre, JSON.stringify(arr.slice(-SEED_RING_SIZE))); } catch {}
-}
-function nextSeedCounter(genre){
-  try {
-    const k = SEED_COUNTER_PREFIX + genre;
-    const n = parseInt(localStorage.getItem(k) || "0", 10) || 0;
-    localStorage.setItem(k, String(n+1));
-    return n+1;
-  } catch { return Math.floor(Math.random()*1e9); }
-}
-async function genHighEntropySeed(genre){
-  const rnd = crypto.getRandomValues(new Uint32Array(4)); // 128bit
-  const parts = [
-    Date.now().toString(16),
-    (performance.now()*1000|0).toString(16),
-    navigator.userAgent || "",
-    rnd[0].toString(16)+rnd[1].toString(16)+rnd[2].toString(16)+rnd[3].toString(16),
-    String(nextSeedCounter(genre))
-  ].join("|");
+// ===== Seed生成（高エントロピー＋再利用防止） =====
+async function newSeedFor(genre){
+  const rnd = crypto.getRandomValues(new Uint32Array(4));
+  const parts = [Date.now().toString(16),(performance.now()*1000|0).toString(16),navigator.userAgent||"",rnd.join("-"),Math.random().toString(16)].join("|");
   const enc = new TextEncoder();
   const buf = await crypto.subtle.digest("SHA-256", enc.encode(parts));
   const dv = new DataView(buf);
-  // 64bitに圧縮
-  const hi = BigInt(dv.getUint32(0)) << 32n | BigInt(dv.getUint32(4));
-  return hi; // BigInt
-}
-async function uniqueSeed(genre){
+  const seed = (BigInt(dv.getUint32(0))<<32n)|BigInt(dv.getUint32(4));
   const ring = loadSeedRing(genre);
-  for (let tries=0; tries<5; tries++){
-    const s = await genHighEntropySeed(genre);
-    const hex = s.toString(16);
-    if (!ring.includes(hex)){
-      ring.push(hex);
-      saveSeedRing(genre, ring);
-      return s;
-    }
-  }
-  // どうしても被るなら最後を少しずらす
-  const s = await genHighEntropySeed(genre);
-  return s ^ BigInt(Math.floor(Math.random()*0xffff));
+  const hex = seed.toString(16);
+  if (!ring.includes(hex)){ ring.push(hex); saveSeedRing(genre, ring); return seed; }
+  // 既出seedなら少し揺らす
+  return seed ^ BigInt( (Math.random()*0xffff)|0 );
 }
-
-// ===== PRNG（mulberry32）でシャッフル =====
 function mulberry32(a){
   return function() {
     let t = a += 0x6D2B79F5;
@@ -116,8 +82,8 @@ function mulberry32(a){
     return ((t ^ t >>> 14) >>> 0) / 4294967296;
   }
 }
-function shuffleWithSeed(arr, seedBig){
-  const seedLow = Number(seedBig & 0xffffffffn) || 1;
+function shuffleWithSeed(arr, seedBig, salt=0){
+  const seedLow = Number((seedBig + BigInt(salt)) & 0xffffffffn) || 1;
   const rand = mulberry32(seedLow);
   for (let i = arr.length - 1; i > 0; i--) {
     const j = Math.floor(rand() * (i + 1));
@@ -125,48 +91,88 @@ function shuffleWithSeed(arr, seedBig){
   }
   return arr;
 }
+async function hash32(str){
+  const enc = new TextEncoder();
+  const buf = await crypto.subtle.digest("SHA-256", enc.encode(str));
+  const v = new DataView(buf);
+  return v.getUint32(0);
+}
 
-// ===== APIラッパ（allpages / categorymembers） =====
-async function nextFromAllpages(seedBig){
-  let cont = loadCursor("all");
-  for (let page=0; page<20; page++){
-    const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=allpages&apnamespace=0&aplimit=100&origin=*" + (cont ? "&apcontinue=" + encodeURIComponent(cont) : "");
+function pushRecent(title){
+  recentQueue.push(title);
+  if (recentQueue.length > RECENT_EXCLUDE) recentQueue = recentQueue.slice(-RECENT_EXCLUDE);
+}
+
+function acceptableTitle(title){
+  if (title === lastTitle) return false;
+  if (inSession.includes(title)) return false;
+  if (seenSet.has(title)) return false;
+  if (recentQueue.includes(title)) return false;
+  return true;
+}
+
+// ===== CM前進：毎回ランダムステップでcmcontinueを進める =====
+async function stepCategory(genre, seedBig){
+  let cont = ""; // その都度先頭から進め直し
+  // 1〜5ステップ進める
+  const steps = Number((seedBig & 0xffn) % 5n) + 1;
+  for (let s=0; s<steps; s++){
+    const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle=" + encodeURIComponent("Category:" + genre) + "&cmtype=page&cmnamespace=0&cmlimit=100&origin=*" + (cont ? "&cmcontinue=" + encodeURIComponent(cont) : "");
     const data = await fetchJSON(url);
-    const pages = (data.query && data.query.allpages) ? data.query.allpages : [];
-    const idxs = shuffleWithSeed(Array.from({length:pages.length}, (_,i)=>i), seedBig + BigInt(page));
-    for (const idx of idxs){
-      const title = pages[idx].title;
-      if (title === lastTitle) continue;
-      if (inSession.includes(title)) continue;
-      if (seenSet.has(title)) continue;
-      saveCursor("all", (data.continue && data.continue.apcontinue) ? data.continue.apcontinue : "");
-      return title;
-    }
-    cont = (data.continue && data.continue.apcontinue) ? data.continue.apcontinue : "";
-    saveCursor("all", cont);
-    if (!cont){ saveCursor("all",""); inSession = []; }
+    cont = (data.continue && data.continue.cmcontinue) ? data.continue.cmcontinue : "";
+    if (!cont) break;
   }
-  return null;
+  return cont; // この位置から拾う
 }
 
 async function nextFromCategory(genre, seedBig){
-  let cont = loadCursor(genre);
-  for (let page=0; page<20; page++){
+  // ランダム前進位置から1〜3バッチ分探す
+  let cont = await stepCategory(genre, seedBig);
+  for (let page=0; page<3; page++){
     const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle=" + encodeURIComponent("Category:" + genre) + "&cmtype=page&cmnamespace=0&cmlimit=100&origin=*" + (cont ? "&cmcontinue=" + encodeURIComponent(cont) : "");
     const data = await fetchJSON(url);
     const members = (data.query && data.query.categorymembers) ? data.query.categorymembers : [];
-    const idxs = shuffleWithSeed(Array.from({length:members.length}, (_,i)=>i), seedBig + BigInt(page) + BigInt(genre.codePointAt(0)||0));
+    // タイトルハッシュをシードに混ぜる
+    const saltList = await Promise.all(members.map(m => hash32(m.title)));
+    const idxs = members.map((_,i)=>i);
+    shuffleWithSeed(idxs, seedBig, saltList.reduce((a,b)=>a+b,0));
     for (const idx of idxs){
       const title = members[idx].title;
-      if (title === lastTitle) continue;
-      if (inSession.includes(title)) continue;
-      if (seenSet.has(title)) continue;
+      if (!acceptableTitle(title)) continue;
+      // この時点で進めた位置を保存して次回はさらに別の塊から始める
       saveCursor(genre, (data.continue && data.continue.cmcontinue) ? data.continue.cmcontinue : "");
       return title;
     }
     cont = (data.continue && data.continue.cmcontinue) ? data.continue.cmcontinue : "";
-    saveCursor(genre, cont);
-    if (!cont){ saveCursor(genre,""); inSession = []; }
+    if (!cont){ saveCursor(genre,""); inSession=[]; }
+  }
+  return null;
+}
+
+async function nextFromAllpages(seedBig){
+  let cont = ""; // allpagesも毎回先頭からランダム前進
+  const steps = Number((seedBig & 0x3ffn) % 5n) + 1;
+  for (let s=0; s<steps; s++){
+    const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=allpages&apnamespace=0&aplimit=100&origin=*" + (cont ? "&apcontinue=" + encodeURIComponent(cont) : "");
+    const data = await fetchJSON(url);
+    cont = (data.continue && data.continue.apcontinue) ? data.continue.apcontinue : "";
+    if (!cont) break;
+  }
+  for (let page=0; page<3; page++){
+    const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=allpages&apnamespace=0&aplimit=100&origin=*" + (cont ? "&apcontinue=" + encodeURIComponent(cont) : "");
+    const data = await fetchJSON(url);
+    const pages = (data.query && data.query.allpages) ? data.query.allpages : [];
+    const saltList = await Promise.all(pages.map(p => hash32(p.title)));
+    const idxs = pages.map((_,i)=>i);
+    shuffleWithSeed(idxs, seedBig, saltList.reduce((a,b)=>a+b,0));
+    for (const idx of idxs){
+      const title = pages[idx].title;
+      if (!acceptableTitle(title)) continue;
+      saveCursor("all", (data.continue && data.continue.apcontinue) ? data.continue.apcontinue : "");
+      return title;
+    }
+    cont = (data.continue && data.continue.apcontinue) ? data.continue.apcontinue : "";
+    if (!cont){ saveCursor("all",""); inSession=[]; }
   }
   return null;
 }
@@ -176,7 +182,7 @@ async function fetchSummaryByTitle(title){
   return normalizeSummary(data);
 }
 
-// ===== 関連：多段フォールバック（v18.2同等） =====
+// 関連（多段フォールバック）
 async function fetchRelatedRobust(title) {
   try { const d = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/related/" + encodeURIComponent(title)); const r = (d.pages || []).map(p => normalizeSummary(p)); if (r && r.length) return r; } catch(e){}
   try { const d = await fetchJSON("https://ja.wikipedia.org/w/api.php?action=query&format=json&list=search&srsearch=" + encodeURIComponent('morelike:"' + title + '"') + "&srlimit=7&srnamespace=0&origin=*"); const hits = (d.query && d.query.search) ? d.query.search : []; const titles = hits.map(h => h.title).filter(Boolean); const out=[]; for (const t of titles){ try{ out.push(await fetchSummaryByTitle(t)); }catch(e){} } if(out.length) return out; } catch(e){}
@@ -186,25 +192,39 @@ async function fetchRelatedRobust(title) {
   return [];
 }
 
-// ===== 選定ロジック =====
+// 科学ジャンルのミックス選択
+function pickScienceMix(seedBig){
+  // シード付き乱数
+  const r = Number((seedBig >> 16n) & 0xffffn) / 0xffff;
+  if (r < 0.5) return "科学";
+  if (r < 0.75) return "数学";
+  return "技術";
+}
+
+// 選択ロジック
 async function pickNext(){
   const g = genreSel.value;
-  const seed = await uniqueSeed(g); // ジャンル毎に未使用Seedを生成
+  const seed = await newSeedFor(g);
   if (g === "all"){
-    // まず各カテゴリを1つずつ試みる（順番はseedで回転）
+    // ランダムに1ジャンル選んでから拾う（均等気味）
     const GENRES = ["哲学","科学","数学","技術","芸術","言語学","心理学","歴史","文学"];
-    const rot = Number(seed % BigInt(GENRES.length));
-    for (let i=0;i<GENRES.length;i++){
-      const cat = GENRES[(i + rot) % GENRES.length];
-      const t = await nextFromCategory(cat, seed + BigInt(i));
+    const idxs = shuffleWithSeed([...Array(GENRES.length).keys()], seed);
+    for (const i of idxs){
+      const t = await nextFromCategory(GENRES[i], seed + BigInt(i));
       if (t) return await fetchSummaryByTitle(t);
     }
-    // ダメなら全ページへ
+    const t2 = await nextFromAllpages(seed);
+    if (t2) return await fetchSummaryByTitle(t2);
+    return null;
+  } else if (g === "科学"){
+    // 科学ミックス
+    const cat = pickScienceMix(seed);
+    const t = await nextFromCategory(cat, seed);
+    if (t) return await fetchSummaryByTitle(t);
     const t2 = await nextFromAllpages(seed);
     if (t2) return await fetchSummaryByTitle(t2);
     return null;
   } else {
-    // 特定ジャンルを優先。尽きたときのみ全体へ
     const t = await nextFromCategory(g, seed);
     if (t) return await fetchSummaryByTitle(t);
     const t2 = await nextFromAllpages(seed);
@@ -213,12 +233,12 @@ async function pickNext(){
   }
 }
 
-// ===== UI =====
 function renderMain(s){
   output.textContent = `今日の概念：${s.title}\n\n${s.blurb}`;
   relatedList.innerHTML = "";
   relatedStatus.textContent = "";
 }
+
 async function showOne(){
   const s = await pickNext();
   if (!s){
@@ -229,6 +249,7 @@ async function showOne(){
   lastTitle = s.title; saveLast(lastTitle);
   seenSet.add(s.title); saveSeen();
   inSession.push(s.title); if (inSession.length > SESSION_LIMIT) inSession = inSession.slice(-SESSION_LIMIT);
+  pushRecent(s.title);
   renderMain(s);
 }
 
@@ -259,8 +280,8 @@ openBtn.addEventListener('click', () => {
 nextBtn.addEventListener('click', () => { showOne(); });
 clearBtn.addEventListener('click', () => { output.textContent = ""; });
 
-// 起動900ms後に最初の概念
-setTimeout(()=>{ showOne(); }, 900);
+// 起動800ms後に最初の概念
+setTimeout(()=>{ showOne(); }, 800);
 
 // PWA登録（静音）
 if (location.protocol.startsWith('http') && 'serviceWorker' in navigator) {

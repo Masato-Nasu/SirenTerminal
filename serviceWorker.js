@@ -1,5 +1,5 @@
-// v18.3 cache bump
-const CACHE_NAME = 'siren-terminal-genreback-v18-3';
+// v18.4 cache bump
+const CACHE_NAME = 'siren-terminal-genreback-v18-4';
 const FILES_TO_CACHE = [
   './index.html',
   './style.css',
