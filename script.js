@@ -1,4 +1,4 @@
-// v18.1: ジャンル復活・関連欄あり・非辞書順巡回・ログUIなし
+// v18.2: ジャンル反映FIX・関連多段フォールバック・ログUIなし
 const output = document.getElementById('output');
 const genreSel = document.getElementById('genreSel');
 const detailBtn = document.getElementById('detailBtn');
@@ -13,22 +13,14 @@ let current = null;
 let inSession = [];
 const SESSION_LIMIT = 500;
 const SEEN_LIMIT = 10000;
-const SEEN_KEY = "siren_seen_titles_v18_1_set";
-const LAST_KEY = "siren_last_title_v18_1";
-const CURSOR_KEY_ALL = "siren_cursor_allpages_v18_1";
-const CURSOR_KEY_CAT_PREFIX = "siren_cursor_cat_v18_1_";
+const SEEN_KEY = "siren_seen_titles_v18_2_set";
+const LAST_KEY = "siren_last_title_v18_2";
+const CURSOR_KEY_ALL = "siren_cursor_allpages_v18_2";
+const CURSOR_KEY_CAT_PREFIX = "siren_cursor_cat_v18_2_";
+const ROUND_KEY = "siren_round_robin_idx_v18_2";
 
-// 起動ごとに異なるseed
-let seed = null;
-(async () => {
-  const nowMS = Date.now().toString();
-  const ua = navigator.userAgent || "";
-  const rnd = crypto.getRandomValues(new Uint32Array(2)).join("-");
-  const enc = new TextEncoder();
-  const buf = await crypto.subtle.digest("SHA-256", enc.encode(nowMS + "|" + ua + "|" + rnd));
-  const view = new DataView(buf);
-  seed = BigInt(view.getUint32(0)) << 32n ^ BigInt(view.getUint32(4));
-})();
+let seenSet = new Set(loadSeen());
+let lastTitle = loadLast();
 
 function loadSeen(){ try { return JSON.parse(localStorage.getItem(SEEN_KEY) || "[]"); } catch { return []; } }
 function saveSeen(){
@@ -42,9 +34,11 @@ function saveSeen(){
 }
 function loadLast(){ try { return localStorage.getItem(LAST_KEY) || ""; } catch { return ""; } }
 function saveLast(t){ try { localStorage.setItem(LAST_KEY, t || ""); } catch {} }
-
-let seenSet = new Set(loadSeen());
-let lastTitle = loadLast();
+function getCursorKeyForGenre(genre){ return genre === "all" ? CURSOR_KEY_ALL : (CURSOR_KEY_CAT_PREFIX + genre); }
+function loadCursor(genre){ try { return localStorage.getItem(getCursorKeyForGenre(genre)) || ""; } catch { return ""; } }
+function saveCursor(genre, cont){ try { localStorage.setItem(getCursorKeyForGenre(genre), cont || ""); } catch {} }
+function getRound(){ try { return parseInt(localStorage.getItem(ROUND_KEY) || "0", 10) || 0; } catch { return 0; } }
+function setRound(v){ try { localStorage.setItem(ROUND_KEY, String(v)); } catch {} }
 
 function bust(u){ const sep = u.includes('?') ? '&' : '?'; return `${u}${sep}t=${Date.now()}`; }
 async function fetchJSON(url){
@@ -62,22 +56,16 @@ function normalizeSummary(data){
   return { title, blurb, detail, url };
 }
 
-// 非辞書順並べ替え（線形合同的変換）
-function permuteIndices(n, base){
-  const mult = 1664525;
-  const out = new Array(n);
-  for (let i=0;i<n;i++){ out[i] = (i*mult + base) % n; }
+// 擬似シャッフル（固定シードなし・シンプル）
+function permuteIndices(n){
+  const out = Array.from({length:n}, (_,i)=>i);
+  // フィッシャー–イェーツ（Math.random使用：ランダムAPIは使わないが、クライアント側擬似乱数）
+  for (let i = n - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
   return out;
 }
-function seedBase(extra=0){
-  const s = seed ? Number((seed + BigInt(extra)) % 2147483647n) : Math.floor(Math.random()*2147483647);
-  return (s <= 0) ? 1 : s;
-}
-function getCursorKeyForGenre(genre){
-  return genre === "all" ? CURSOR_KEY_ALL : (CURSOR_KEY_CAT_PREFIX + genre);
-}
-function loadCursor(genre){ try { return localStorage.getItem(getCursorKeyForGenre(genre)) || ""; } catch { return ""; } }
-function saveCursor(genre, cont){ try { localStorage.setItem(getCursorKeyForGenre(genre), cont || ""); } catch {} }
 
 async function nextFromAllpages(){
   let cont = loadCursor("all");
@@ -85,7 +73,7 @@ async function nextFromAllpages(){
     const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=allpages&apnamespace=0&aplimit=100&origin=*" + (cont ? "&apcontinue=" + encodeURIComponent(cont) : "");
     const data = await fetchJSON(url);
     const pages = (data.query && data.query.allpages) ? data.query.allpages : [];
-    const order = permuteIndices(pages.length, seedBase());
+    const order = permuteIndices(pages.length);
     for (const idx of order){
       const title = pages[idx].title;
       if (title === lastTitle) continue;
@@ -107,7 +95,7 @@ async function nextFromCategory(genre){
     const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle=" + encodeURIComponent("Category:" + genre) + "&cmtype=page&cmnamespace=0&cmlimit=100&origin=*" + (cont ? "&cmcontinue=" + encodeURIComponent(cont) : "");
     const data = await fetchJSON(url);
     const members = (data.query && data.query.categorymembers) ? data.query.categorymembers : [];
-    const order = permuteIndices(members.length, seedBase(genre.codePointAt(0)||0));
+    const order = permuteIndices(members.length);
     for (const idx of order){
       const title = members[idx].title;
       if (title === lastTitle) continue;
@@ -131,20 +119,22 @@ async function fetchSummaryByTitle(title){
 async function pickNext(){
   const g = genreSel.value;
   if (g === "all"){
-    // カテゴリ横断で色が偏らないよう、カテゴリを一巡
+    // ラウンドロビン開始位置を毎回インクリメントし、哲学に固定されないようにする
     const GENRES = ["哲学","科学","数学","技術","芸術","言語学","心理学","歴史","文学"];
+    let start = getRound() % GENRES.length;
     for (let i=0;i<GENRES.length;i++){
-      const t = await nextFromCategory(GENRES[(i + seedBase()) % GENRES.length]);
-      if (t) return await fetchSummaryByTitle(t);
+      const idx = (start + i) % GENRES.length;
+      const t = await nextFromCategory(GENRES[idx]);
+      if (t){ setRound(start + i + 1); return await fetchSummaryByTitle(t); }
     }
-    // カテゴリで見つからなければ全ページへ
+    // どのカテゴリでも見つからなければ全ページへ
     const t2 = await nextFromAllpages();
     if (t2) return await fetchSummaryByTitle(t2);
     return null;
   } else {
     const t = await nextFromCategory(g);
     if (t) return await fetchSummaryByTitle(t);
-    // そのカテゴリが尽きたら一旦allpagesへフォールバック
+    // 選択カテゴリが尽きたときだけ全ページにフォールバック
     const t2 = await nextFromAllpages();
     if (t2) return await fetchSummaryByTitle(t2);
     return null;
@@ -174,12 +164,59 @@ detailBtn.addEventListener('click', () => {
   if (!current) return;
   output.textContent += `\n\n[詳細]\n${current.detail}\n\n[出典] ${current.url}`;
 });
+
+// 関連：多段フォールバック
+async function fetchRelatedRobust(title) {
+  try { // 1) REST related
+    const d = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/related/" + encodeURIComponent(title));
+    const r = (d.pages || []).map(p => normalizeSummary(p));
+    if (r && r.length) return r;
+  } catch(e){}
+  try { // 2) morelike search
+    const d = await fetchJSON("https://ja.wikipedia.org/w/api.php?action=query&format=json&list=search&srsearch=" + encodeURIComponent('morelike:"' + title + '"') + "&srlimit=7&srnamespace=0&origin=*");
+    const hits = (d.query && d.query.search) ? d.query.search : [];
+    const titles = hits.map(h => h.title).filter(Boolean);
+    const out = [];
+    for (const t of titles){ try { const s = await fetchSummaryByTitle(t); out.push(s); } catch(e){} }
+    if (out.length) return out;
+  } catch(e){}
+  try { // 3) parse links
+    const d = await fetchJSON("https://ja.wikipedia.org/w/api.php?action=parse&format=json&page=" + encodeURIComponent(title) + "&prop=links&origin=*");
+    const links = (d.parse && d.parse.links) ? d.parse.links : [];
+    const titles = links.filter(l => l.ns === 0 && l['*']).slice(0, 10).map(l => l['*']);
+    const out = [];
+    for (const t of titles){ try { const s = await fetchSummaryByTitle(t); out.push(s); } catch(e){} }
+    if (out.length) return out;
+  } catch(e){}
+  try { // 4) opensearch
+    const d = await fetchJSON("https://ja.wikipedia.org/w/api.php?action=opensearch&format=json&search=" + encodeURIComponent(title) + "&limit=7&namespace=0&origin=*");
+    const titles = Array.isArray(d) && Array.isArray(d[1]) ? d[1] : [];
+    const out = [];
+    for (const t of titles){ try { const s = await fetchSummaryByTitle(t); out.push(s); } catch(e){} }
+    if (out.length) return out;
+  } catch(e){}
+  try { // 5) category neighbor
+    const d = await fetchJSON("https://ja.wikipedia.org/w/api.php?action=query&format=json&prop=categories&clshow=!hidden&titles=" + encodeURIComponent(title) + "&origin=*");
+    const pages = d.query && d.query.pages ? Object.values(d.query.pages) : [];
+    const cats = pages.length ? (pages[0].categories || []) : [];
+    if (cats.length){
+      const cat = cats[0].title;
+      const d2 = await fetchJSON("https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle=" + encodeURIComponent(cat) + "&cmtype=page&cmnamespace=0&cmlimit=7&origin=*");
+      const members = (d2.query && d2.query.categorymembers) ? d2.query.categorymembers : [];
+      const titles = members.map(m => m.title).filter(Boolean);
+      const out = [];
+      for (const t of titles){ try { const s = await fetchSummaryByTitle(t); out.push(s); } catch(e){} }
+      if (out.length) return out;
+    }
+  } catch(e){}
+  return [];
+}
+
 relatedBtn.addEventListener('click', async () => {
   if (!current) return;
   relatedStatus.textContent = "読み込み中…"; relatedList.innerHTML = "";
   try {
-    const data = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/related/" + encodeURIComponent(current.title));
-    const rel = (data.pages || []).map(p => normalizeSummary(p));
+    const rel = await fetchRelatedRobust(current.title);
     if (!rel.length){ relatedStatus.textContent = "（見つかりませんでした）"; return; }
     relatedStatus.textContent = `（${rel.length}件）`;
     rel.slice(0,7).forEach((p,i)=>{
@@ -191,6 +228,7 @@ relatedBtn.addEventListener('click', async () => {
     relatedStatus.textContent = "（取得に失敗しました）";
   }
 });
+
 openBtn.addEventListener('click', () => {
   const url = current?.url || (current?.title ? "https://ja.wikipedia.org/wiki/" + encodeURIComponent(current.title) : null);
   if (url) window.open(url, '_blank', 'noopener');
@@ -198,8 +236,8 @@ openBtn.addEventListener('click', () => {
 nextBtn.addEventListener('click', () => { showOne(); });
 clearBtn.addEventListener('click', () => { output.textContent = ""; });
 
-// 起動1.2秒後に最初の概念
-setTimeout(()=>{ showOne(); }, 1200);
+// 起動1.0秒後に最初の概念
+setTimeout(()=>{ showOne(); }, 1000);
 
 // PWA登録（静音）
 if (location.protocol.startsWith('http') && 'serviceWorker' in navigator) {
