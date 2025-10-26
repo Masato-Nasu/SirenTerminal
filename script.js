@@ -237,188 +237,219 @@ function escapeHtml(str){
 
 
 
-// === v19.21: 絶対に止まらない関連オンリー + キャッシュ供給（UI非変更） ========
+// === v19.22: 科学ジャンル限定 + 24連ユニーク + 無限補充（UI非変更） ==============
 (function(){
   const tEl = document.getElementById("titleBox") || document.getElementById("title") || document.querySelector(".title");
   const bEl = document.getElementById("blurbBox") || document.getElementById("blurb") || document.querySelector(".blurb") || document.body;
-  const NG_RE = /候補が[\s　]*(?:出ません|見つかりません)/;
 
-  // ← ここに Cloudflare Worker のホストを入れると最優先で使います（任意）
-  //    例: const WORKER = 'https://your-worker.workers.dev';
-  const WORKER = ''; // 空なら使わない
+  // --- 設定 ---
+  const Q_KEY='siren_v19_22_q';
+  const SEEN_KEY='siren_v19_22_seen';
+  const CMC_KEY='siren_v19_22_cm'; // カテゴリごとのcmcontinueトークン
+  const FIRSTN_KEY='siren_v19_22_firstN_count';
+  const FIRSTN_TITLES_KEY='siren_v19_22_firstN_titles';
+  const FIRST_N = 24;       // 最初は絶対ユニークで24件出す
+  const MAX_QUEUE = 80;     // プール
+  const MIN_REFILL = 20;    // 下回ったら補充
+  const SEEN_LIMIT = 3000;  // 既読上限（科学カテゴリは広いので多め）
 
-  // storage helpers
+  // 科学系カテゴリ（日本語版）
+  const SCI_CATS = [
+    "Category:自然科学",
+    "Category:物理学",
+    "Category:化学",
+    "Category:生物学",
+    "Category:地球科学",
+    "Category:天文学",
+    "Category:工学",
+    "Category:生命科学",
+    "Category:神経科学",
+    "Category:科学史"
+  ];
+
+  // --- 基本ユーティリティ ---
   const safe=(v,f="") => (typeof v==="string" && v.trim()) ? v : f;
   const jget=(k,d)=>{ try{ return JSON.parse(localStorage.getItem(k) ?? "null") ?? d; }catch{return d;} };
   const jset=(k,v)=> localStorage.setItem(k, JSON.stringify(v));
+  const nowTitle=()=> (tEl?.textContent||"").replace(/[【】]/g,"").trim();
 
-  const Q_KEY='siren_v19_21_queue', SEEN_KEY='siren_v19_21_seen', LAST_KEY='siren_v19_21_last', CACHE_KEY='siren_v19_21_cache';
-  const MAX_QUEUE=64, MIN_REFILL=16, SEEN_LIMIT=1500, MAX_CACHE=200;
+  function loadQ(){ return jget(Q_KEY,[]); }
+  function saveQ(q){ jset(Q_KEY, q.slice(0, MAX_QUEUE)); }
 
-  const nowTitle = ()=> (tEl?.textContent||"").replace(/[【】]/g,"").trim();
-
-  // ---- キャッシュ（成功要約を蓄積、ネット死でも供給可能） ----
-  function pushCache(item){
-    if (!item?.title) return;
-    const map = jget(CACHE_KEY, {});
-    map[item.title] = { title: item.title, extract: safe(item.extract,"") };
-    // サイズ制御
-    const keys = Object.keys(map);
-    if (keys.length > MAX_CACHE){
-      // 古いものから削除（keyの先頭を削る簡易実装）
-      delete map[keys[0]];
-    }
-    jset(CACHE_KEY, map);
+  function pushSeen(title){
+    if (!title) return;
+    const set = new Set(jget(SEEN_KEY,[]));
+    set.add(title);
+    let arr = Array.from(set);
+    if (arr.length > SEEN_LIMIT) arr = arr.slice(-Math.floor(SEEN_LIMIT*0.6));
+    jset(SEEN_KEY, arr);
   }
-  function cachePick(base){
-    const map = jget(CACHE_KEY, {});
-    if (map[base]) return map[base];
-    const keys = Object.keys(map);
-    if (!keys.length) return null;
-    // 直近タイトルに近いキーを優先（単純一致がなければ先頭）
-    return map[keys[keys.length-1]];
+  function wasSeen(title){ return jget(SEEN_KEY,[]).includes(title); }
+
+  function firstNCount(){ return jget(FIRSTN_KEY, 0); }
+  function setFirstNCount(n){ jset(FIRSTN_KEY, n); }
+  function firstNTitles(){ return new Set(jget(FIRSTN_TITLES_KEY, [])); }
+  function pushFirstNTitle(title){
+    const s = firstNTitles(); s.add(title);
+    jset(FIRSTN_TITLES_KEY, Array.from(s));
   }
 
-  // ---- 既読 & キュー ----
-  function pushSeen(t){
-    if (!t) return;
-    const set=new Set(jget(SEEN_KEY,[])); set.add(t);
-    const arr=Array.from(set);
-    if (arr.length>SEEN_LIMIT) jset(SEEN_KEY, arr.slice(-Math.floor(SEEN_LIMIT*0.6)));
-    else jset(SEEN_KEY, arr);
+  function dequeue(){
+    const q = loadQ();
+    const it = q.shift();
+    saveQ(q);
+    return it || null;
   }
-  const wasSeen=(t)=> jget(SEEN_KEY,[]).includes(t);
-  const loadQ=()=> jget(Q_KEY,[]);
-  const saveQ=(q)=> jset(Q_KEY, q.slice(0,MAX_QUEUE));
-  const enqueue=(items)=>{
-    const q=loadQ();
-    for(const it of items){
-      const ttl=it?.title; if (!ttl) continue;
-      if (wasSeen(ttl)) continue;
-      if (q.find(x=>x.title===ttl)) continue;
-      const obj={ title: ttl, extract: safe(it.extract,"") };
-      q.push(obj);
-      pushCache(obj);
-      if (q.length>=MAX_QUEUE) break;
+  function enqueue(items, requireUniqueForFirstN=true){
+    const q = loadQ();
+    const seenSet = new Set(jget(SEEN_KEY,[]));
+    const firstNset = firstNTitles();
+    const needUnique = firstNCount() < FIRST_N && requireUniqueForFirstN;
+    for (const it of items){
+      const title = it?.title; if (!title) continue;
+      // まず既読で弾く
+      if (seenSet.has(title)) continue;
+      // 最初の24件は "これまで出した24件タイトルの重複" も弾く
+      if (needUnique && firstNset.has(title)) continue;
+      if (q.find(x=>x.title===title)) continue;
+      q.push({ title, extract: safe(it.extract,"") });
+      if (q.length >= MAX_QUEUE) break;
     }
     saveQ(q);
-  };
-  const dequeue=()=>{ const q=loadQ(); const it=q.shift(); saveQ(q); return it||null; }
+  }
 
-  // ---- fetch helpers ----
-  async function fetchJSON(u,{retries=2,timeout=8000}={}){
-    for (let a=0;a<=retries;a++){
-      const ctrl=new AbortController(); const timer=setTimeout(()=>ctrl.abort(), timeout);
+  // --- MediaWiki Action API（origin=*）---
+  async function fetchJSON(u, {retries=3, timeout=8000} = {}){
+    for (let a=0; a<=retries; a++){
+      const ctrl = new AbortController();
+      const timer = setTimeout(()=>ctrl.abort(), timeout);
       try{
-        const r=await fetch(u+(u.includes('?')?'&':'?')+'_='+Date.now(),{cache:'no-store',signal:ctrl.signal});
+        const r = await fetch(u + (u.includes('?')?'&':'?') + '_=' + Date.now(), { cache:'no-store', signal: ctrl.signal });
         clearTimeout(timer);
-        const ct=(r.headers.get('content-type')||'').toLowerCase();
-        if(!r.ok||!ct.includes('application/json')) throw new Error('bad '+r.status);
+        if (!r.ok) throw new Error('HTTP '+r.status);
+        const ct = (r.headers.get('content-type')||'').toLowerCase();
+        if (!ct.includes('application/json')) throw new Error('CT');
         return await r.json();
-      }catch(e){ clearTimeout(timer); await new Promise(rs=>setTimeout(rs, 320*(a+1))); }
+      }catch(e){
+        clearTimeout(timer);
+        await new Promise(rs=>setTimeout(rs, 280*(a+1)));
+      }
     }
     return null;
   }
-  const enc=(t)=>encodeURIComponent(t).replace(/%20/g,'_');
+  const enc = (t)=>encodeURIComponent(t).replace(/%20/g,'_');
 
-  function mkURLSummary(base, via){
-    const t = enc(base);
-    if (via==='worker' && WORKER) return `${WORKER}/w/api.php?action=query&prop=extracts&exintro&explaintext&titles=${t}&format=json`;
-    return `https://ja.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles=${t}&format=json&origin=*`;
-  }
-  function mkURLRelated(base, via, limit){
-    const q = encodeURIComponent('morelike:"'+base+'"');
-    if (via==='worker' && WORKER) return `${WORKER}/w/api.php?action=query&list=search&srsearch=${q}&srlimit=${limit}&format=json`;
-    return `https://ja.wikipedia.org/w/api.php?action=query&list=search&srsearch=${q}&srlimit=${limit}&format=json&origin=*`;
-  }
-
-  async function apiSummary(base){
-    // 1) Worker → 2) Action API → 3) cache
-    if (WORKER){
-      const j = await fetchJSON(mkURLSummary(base,'worker')); 
-      if (j?.query?.pages){ const k=Object.keys(j.query.pages)[0]; const p=j.query.pages[k];
-        if (p){ return { title: safe(p.title,base), extract: safe(p.extract,"") }; }
+  async function apiCategoryMembers(catTitle, limit=30){
+    // cmcontinue はローテーション管理
+    const cmMap = jget(CMC_KEY, {});
+    const token = cmMap[catTitle] || "";
+    const u = `https://ja.wikipedia.org/w/api.php?action=query&list=categorymembers&cmtitle=${enc(catTitle)}&cmtype=page&cmlimit=${limit}`
+              + (token?`&cmcontinue=${encodeURIComponent(token)}`:"")
+              + `&format=json&origin=*`;
+    const j = await fetchJSON(u);
+    if (!j?.query?.categorymembers) return { items:[], next:null };
+    const next = j?.continue?.cmcontinue || null;
+    cmMap[catTitle] = next || ""; jset(CMC_KEY, cmMap);
+    const titles = j.query.categorymembers.map(x=>x.title).filter(Boolean);
+    // 要約（extracts）をまとめて取得（最大20ずつ）
+    const items = [];
+    for (let i=0; i<titles.length; i+=20){
+      const batch = titles.slice(i, i+20);
+      const titlesParam = batch.map(enc).join('|');
+      const u2 = `https://ja.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&format=json&origin=*&titles=${titlesParam}`;
+      const j2 = await fetchJSON(u2);
+      const pages = j2?.query?.pages || {};
+      for (const k of Object.keys(pages)){
+        const p = pages[k];
+        if (!p?.title) continue;
+        items.push({ title: p.title, extract: safe(p.extract,"") });
       }
     }
-    const j2 = await fetchJSON(mkURLSummary(base,'action'));
-    if (j2?.query?.pages){ const k=Object.keys(j2.query.pages)[0]; const p=j2.query.pages[k];
-      if (p){ return { title: safe(p.title,base), extract: safe(p.extract,"") }; }
-    }
-    return cachePick(base);
+    return { items, next };
   }
 
-  async function apiRelated(base, limit=12){
-    // 1) Worker → 2) Action API
-    let titles = null;
-    if (WORKER){
-      const j = await fetchJSON(mkURLRelated(base,'worker',limit));
-      if (j?.query?.search) titles = j.query.search.map(x=>x.title).filter(Boolean);
+  async function refillScience(){
+    // カテゴリを巡回して順次補充（cmcontinueで深く潜る）
+    for (const cat of SCI_CATS){
+      const { items } = await apiCategoryMembers(cat, 30);
+      if (items && items.length){
+        // 最初の24件は重複厳禁フラグを立てる
+        enqueue(items, true);
+        if (loadQ().length >= MIN_REFILL) break;
+      }
     }
-    if (!titles){
-      const j2 = await fetchJSON(mkURLRelated(base,'action',limit));
-      if (j2?.query?.search) titles = j2.query.search.map(x=>x.title).filter(Boolean);
-    }
-    if (!titles || !titles.length) return [];
-
-    const out=[];
-    for (const t of titles.slice(0,limit)){
-      const s = await apiSummary(t);
-      if (s) out.push({ title: s.title, extract: s.extract });
-    }
-    return out;
-  }
-
-  async function refill(baseTitle){
-    const base = safe(baseTitle || nowTitle() || jget(LAST_KEY,""), "月");
-    const rel = await apiRelated(base, 12);
-    if (rel.length) enqueue(rel);
-    // 2nd hop
-    const seeds = rel.slice(0,6).map(x=>x.title);
-    for (const s of seeds){
-      const rel2 = await apiRelated(s, 8);
-      if (rel2.length) enqueue(rel2);
-      if (loadQ().length >= MIN_REFILL) break;
-    }
-    if (loadQ().length===0){
-      const sum = await apiSummary(base);
-      if (sum) enqueue([sum]);
+    // まだ薄いなら二周目
+    if (loadQ().length < MIN_REFILL){
+      for (const cat of SCI_CATS){
+        const { items } = await apiCategoryMembers(cat, 30);
+        if (items && items.length){
+          enqueue(items, true);
+          if (loadQ().length >= MIN_REFILL) break;
+        }
+      }
     }
   }
-  async function ensureQ(){ if (loadQ().length < MIN_REFILL) await refill(nowTitle()); }
+
+  async function ensureQ(){
+    if (loadQ().length < MIN_REFILL){
+      await refillScience();
+    }
+  }
 
   function paint(it){
     if (!it) return;
-    if (tEl) tEl.textContent = `【 ${safe(it.title,'(no title)')} 】`;
-    if (bEl) bEl.textContent = safe(it.extract, "（取得に失敗しました。少し待って再試行してください）");
-    pushSeen(safe(it.title,'')); jset(LAST_KEY, safe(it.title,'')); pushCache({title:it.title, extract:it.extract});
-  }
-
-  async function serve(force=false){
-    const txt = safe(bEl?.textContent||"","").trim();
-    if (force || !txt || NG_RE.test(txt) || /undefined/.test(txt)){
-      await ensureQ();
-      let it = dequeue();
-      if (!it){
-        await refill(nowTitle());
-        it = dequeue() || cachePick(nowTitle()) || cachePick(jget(LAST_KEY,""));
-      }
-      if (it) paint(it);
-    }else{
-      const t = nowTitle(); if (t){ pushSeen(t); jset(LAST_KEY, t); }
+    // 成功時は余計な固定文は付けない（毎回同じ文字列をやめる）
+    if (tEl) tEl.textContent = `【 ${safe(it.title,'')} 】`;
+    if (bEl) bEl.textContent = safe(it.extract, "");
+    // カウントと既読・24件ユニークの記録
+    const cnt = firstNCount();
+    const title = safe(it.title,'');
+    pushSeen(title);
+    if (cnt < FIRST_N){
+      pushFirstNTitle(title);
+      setFirstNCount(cnt + 1);
     }
   }
 
+  async function serve(){
+    await ensureQ();
+    // 24件ユニーク保証：必要な間は重複をスキップして取り直す
+    const seenSet = new Set(jget(SEEN_KEY,[]));
+    const firstNset = firstNTitles();
+    let it = null;
+    for (let guard=0; guard<MAX_QUEUE; guard++){
+      const cand = dequeue(); if (!cand) break;
+      const title = safe(cand.title,'');
+      const needUnique = firstNCount() < FIRST_N;
+      if (seenSet.has(title)) continue;
+      if (needUnique && firstNset.has(title)) continue;
+      it = cand; break;
+    }
+    if (!it){
+      // キューが尽きた/重複しかない → 再補充してもう一度
+      await refillScience();
+      for (let guard=0; guard<MAX_QUEUE; guard++){
+        const cand = dequeue(); if (!cand) break;
+        const title = safe(cand.title,'');
+        const needUnique = firstNCount() < FIRST_N;
+        if (seenSet.has(title)) continue;
+        if (needUnique && firstNset.has(title)) continue;
+        it = cand; break;
+      }
+    }
+    if (it) paint(it);
+  }
+
   function hook(){
-    setTimeout(()=>serve(true), 60);
+    // 初期表示
+    setTimeout(serve, 60);
+    // NEXT/RELATED 後
     ["nextBtn","next","relBtn","relatedBtn"].forEach(id=>{
-      const el=document.getElementById(id);
-      if (el) el.addEventListener('click', ()=> setTimeout(()=>serve(false), 50));
+      const el = document.getElementById(id);
+      if (el) el.addEventListener('click', ()=> setTimeout(serve, 40));
     });
-    new MutationObserver(()=> setTimeout(()=>serve(false), 10))
-      .observe(document.body,{childList:true,characterData:true,subtree:true});
-    setInterval(()=>{ ensureQ(); }, 3000);
   }
   if (document.readyState==="loading") document.addEventListener("DOMContentLoaded", hook, {once:true});
   else hook();
 })();
-// === end v19.21 =============================================================
+// === end v19.22 =============================================================
