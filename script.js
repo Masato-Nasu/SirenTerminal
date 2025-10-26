@@ -1,4 +1,4 @@
-// v10: 重複回避 & cacheBust。三段フォールバック関連、ログUI、正方形UIを維持。
+// v11: 起動ごとに違う表示（localStorageで既出を保存）、関連5段フォールバック、ログ強化
 
 const output = document.getElementById('output');
 const detailBtn = document.getElementById('detailBtn');
@@ -17,10 +17,26 @@ const banner = document.getElementById('banner');
 let timer = null;
 let current = null;
 const historyBuf = [];
-const seenTitles = new Set(); // 表示済みタイトル
 const categoryCache = {};
+const SEEN_KEY = "siren_seen_titles_v11";
+const SEEN_LIMIT = 300;
+let seenTitles = new Set(loadSeen());
 
 if (location.protocol === 'file:') banner.hidden = false;
+
+function loadSeen(){
+  try {
+    const raw = localStorage.getItem(SEEN_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch { return []; }
+}
+function saveSeen(){
+  try {
+    const arr = Array.from(seenTitles).slice(-SEEN_LIMIT);
+    localStorage.setItem(SEEN_KEY, JSON.stringify(arr));
+  } catch {}
+}
 
 function logLine(...args){
   const s = args.map(a => (typeof a === 'string' ? a : JSON.stringify(a))).join(' ');
@@ -70,15 +86,12 @@ async function fetchRandomSummaryOnce(){
   const data = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/random/summary");
   return normalizeSummary(data);
 }
-
-// ランダム：重複回避リトライ（最大8回）
 async function fetchRandomSummaryDedup(){
   const MAX_TRY = 8;
   for (let i = 0; i < MAX_TRY; i++){
     const s = await fetchRandomSummaryOnce();
     if (!seenTitles.has(s.title)) return s;
   }
-  // どうしても避けられない場合は最後のものを返す
   return await fetchRandomSummaryOnce();
 }
 
@@ -115,26 +128,74 @@ async function parseLinksRelated(title) {
   return pages;
 }
 
+async function opensearchRelated(title){
+  const data = await fetchJSON("https://ja.wikipedia.org/w/api.php?action=opensearch&format=json&search=" + encodeURIComponent(title) + "&limit=5&namespace=0&origin=*");
+  const titles = Array.isArray(data) && Array.isArray(data[1]) ? data[1] : [];
+  const pages = [];
+  for (const t of titles) {
+    try {
+      const d = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t));
+      pages.push(normalizeSummary(d));
+    } catch(e) { logLine("summary fail", t, e.message); }
+  }
+  return pages;
+}
+
+async function categoryNeighbors(title){
+  // ページのカテゴリ取得 → 最初のカテゴリからメンバーを拾う
+  const data = await fetchJSON("https://ja.wikipedia.org/w/api.php?action=query&format=json&prop=categories&clshow=!hidden&titles=" + encodeURIComponent(title) + "&origin=*");
+  const pages = data.query && data.query.pages ? Object.values(data.query.pages) : [];
+  const cats = pages.length ? (pages[0].categories || []) : [];
+  if (!cats.length) return [];
+  const cat = cats[0].title; // "Category:〇〇"
+  const data2 = await fetchJSON("https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle=" + encodeURIComponent(cat) + "&cmtype=page&cmnamespace=0&cmlimit=10&origin=*");
+  const members = (data2.query && data2.query.categorymembers) ? data2.query.categorymembers : [];
+  const titles = members.map(m => m.title).filter(Boolean);
+  const out = [];
+  for (const t of titles) {
+    try {
+      const d = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t));
+      out.push(normalizeSummary(d));
+    } catch(e) { logLine("summary fail", t, e.message); }
+  }
+  return out;
+}
+
 async function fetchRelatedRobust(title) {
   try {
     const r = await restRelated(title);
-    if (r && r.length) return r;
+    if (r && r.length) { logLine("related: via REST"); return r; }
     logLine("REST related empty, trying search");
   } catch(e) {
     logLine("REST related failed:", e.message);
   }
   try {
     const s = await searchRelated(title);
-    if (s && s.length) return s;
+    if (s && s.length) { logLine("related: via morelike search"); return s; }
     logLine("Search related empty, trying parse-links");
   } catch(e) {
     logLine("Search related failed:", e.message);
   }
   try {
     const p = await parseLinksRelated(title);
-    return p;
+    if (p && p.length) { logLine("related: via parse-links"); return p; }
+    logLine("Parse-links empty, trying opensearch");
   } catch(e) {
     logLine("Parse-links related failed:", e.message);
+  }
+  try {
+    const o = await opensearchRelated(title);
+    if (o && o.length) { logLine("related: via opensearch"); return o; }
+    logLine("Opensearch empty, trying category neighbors");
+  } catch(e) {
+    logLine("Opensearch failed:", e.message);
+  }
+  try {
+    const c = await categoryNeighbors(title);
+    logLine("related: via category neighbors, count:", c.length);
+    return c;
+  } catch(e) {
+    logLine("Category neighbors failed:", e.message);
     return [];
   }
 }
@@ -178,7 +239,6 @@ async function fetchFromGenreDedup(genre) {
     const s = normalizeSummary(data);
     if (!seenTitles.has(s.title)) return s;
   }
-  // どうしても被るなら最後の一件を返す
   const t = pickRandom(list);
   const data = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t));
   return normalizeSummary(data);
@@ -190,7 +250,14 @@ async function showOne() {
     current = (genre === "all") ? await fetchRandomSummaryDedup() : await fetchFromGenreDedup(genre);
     historyBuf.push(current);
     seenTitles.add(current.title);
-    if (historyBuf.length > 50) { const removed = historyBuf.shift(); /* keep set; it's OK */ }
+    if (seenTitles.size > SEEN_LIMIT) {
+      // 古いものを間引く
+      const diff = seenTitles.size - SEEN_LIMIT;
+      const keep = Array.from(seenTitles).slice(diff);
+      seenTitles = new Set(keep);
+    }
+    saveSeen();
+    if (historyBuf.length > 50) { historyBuf.shift(); }
     output.textContent = "";
     await typeWriter(`今日の概念：${current.title}\n\n`);
     await typeWriter(`${current.blurb}`);
@@ -253,7 +320,6 @@ diagBtn.addEventListener('click', () => {
     "オンライン: " + (navigator.onLine ? "Yes" : "No"),
     "タイトル: " + (current?.title || "（なし）"),
     "URL: " + (current?.url || "（なし）"),
-    "履歴件数: " + historyBuf.length,
     "既出タイトル数: " + seenTitles.size
   ];
   appendText("\n\n" + lines.join("\n"));
