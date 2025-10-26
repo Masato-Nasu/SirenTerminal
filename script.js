@@ -1,4 +1,4 @@
-// v7: Related可視化・リンク化、出力DIV化、オートスクロール、全コントロール正方形UI、SW v7
+// v8: Robust related fallback (REST → MediaWiki morelike search), square UI, diag button
 
 const output = document.getElementById('output');
 const detailBtn = document.getElementById('detailBtn');
@@ -8,6 +8,7 @@ const genreSel = document.getElementById('genreSel');
 const openBtn = document.getElementById('openBtn');
 const nextBtn = document.getElementById('nextBtn');
 const clearBtn = document.getElementById('clearBtn');
+const diagBtn = document.getElementById('diagBtn');
 const banner = document.getElementById('banner');
 
 let timer = null;
@@ -50,12 +51,47 @@ async function fetchRandomSummary() {
   return normalizeSummary(data);
 }
 
-async function fetchRelated(title) {
+async function restRelated(title) {
   const url = "https://ja.wikipedia.org/api/rest_v1/page/related/" + encodeURIComponent(title);
   const res = await fetch(url, { mode: "cors", headers: { "Accept": "application/json" }, cache: "no-store" });
-  if (!res.ok) throw new Error("Wikipedia related fetch failed: " + res.status);
+  if (!res.ok) throw new Error("REST related failed: " + res.status);
   const data = await res.json();
   return (data.pages || []).map(p => normalizeSummary(p));
+}
+
+async function searchRelated(title) {
+  // MediaWiki search API morelike
+  const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=search&srsearch=" + encodeURIComponent('morelike:"' + title + '"') + "&srlimit=5&srnamespace=0&origin=*";
+  const res = await fetch(url, { mode: "cors", cache: "no-store" });
+  if (!res.ok) throw new Error("Search related failed: " + res.status);
+  const data = await res.json();
+  const hits = (data.query && data.query.search) ? data.query.search : [];
+  const titles = hits.map(h => h.title).filter(Boolean);
+  const pages = [];
+  for (const t of titles) {
+    const sUrl = "https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t);
+    const sRes = await fetch(sUrl, { mode: "cors", headers: { "Accept": "application/json" }, cache: "no-store" });
+    if (!sRes.ok) continue;
+    const sData = await sRes.json();
+    pages.push(normalizeSummary(sData));
+  }
+  return pages;
+}
+
+async function fetchRelatedRobust(title) {
+  try {
+    const r = await restRelated(title);
+    if (r && r.length) return r;
+  } catch(e) {
+    log("REST related fail, fallback to search:", e);
+  }
+  try {
+    const s = await searchRelated(title);
+    if (s && s.length) return s;
+  } catch(e) {
+    log("Search related also failed:", e);
+  }
+  return [];
 }
 
 const GENRE_TO_CATEGORIES = {
@@ -128,16 +164,15 @@ detailBtn.addEventListener('click', () => {
 
 relatedBtn.addEventListener('click', async () => {
   if (!current) return;
-  appendText(`\n\n[関連項目] 読み込み中…`);
+  appendText(`\n\n[関連項目] 読み込み中...`);
   try {
-    const rel = await fetchRelated(current.title);
-    output.textContent = output.textContent.replace(/\[関連項目\] 読み込み中…$/, "[関連項目]");
-    if (!rel.length) { appendText(`\n- （関連なし）`); return; }
+    const rel = await fetchRelatedRobust(current.title);
+    output.textContent = output.textContent.replace(/\[関連項目\] 読み込み中\.\.\.$/, "[関連項目]");
+    if (!rel.length) { appendText(`\n- （関連が見つかりませんでした）`); return; }
     let html = "";
     rel.slice(0, 5).forEach((p, i) => {
       const safeTitle = escapeHtml(p.title);
-      const url = p.url;
-      html += `\n- [${i+1}] <a href="${url}" target="_blank" rel="noopener">${safeTitle}</a>`;
+      html += `\n- [${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${safeTitle}</a>`;
     });
     appendHTML(html);
   } catch (e) {
@@ -153,7 +188,22 @@ openBtn.addEventListener('click', () => {
 
 nextBtn.addEventListener('click', () => { if (timer) { clearInterval(timer); timer = null; } showOne().then(setupIntervalFromSelect); });
 clearBtn.addEventListener('click', () => { output.textContent = ""; });
-genreSel.addEventListener('change', () => { if (timer) { clearInterval(timer); timer = null; } showOne().then(setupIntervalFromSelect); });
+
+genreSel.addEventListener('change', () => { 
+  if (timer) { clearInterval(timer); timer = null; } 
+  showOne().then(setupIntervalFromSelect); 
+});
+
+diagBtn.addEventListener('click', () => {
+  const lines = [
+    "[診断]",
+    "オンライン: " + (navigator.onLine ? "Yes" : "No"),
+    "タイトル: " + (current?.title || "（なし）"),
+    "URL: " + (current?.url || "（なし）"),
+    "プロトコル: " + location.protocol,
+  ];
+  appendText("\n\n" + lines.join("\n"));
+});
 
 window.addEventListener('keydown', (e) => {
   if (e.key.toLowerCase() === 'o') { const url = current?.url || (current?.title ? "https://ja.wikipedia.org/wiki/" + encodeURIComponent(current.title) : null); if (url) window.open(url, '_blank', 'noopener'); }
