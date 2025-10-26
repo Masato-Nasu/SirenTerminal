@@ -1,13 +1,13 @@
-// v20.3: genre whitelist + subcategory BFS + de-dup text + startup diversity
+// v20.4: genre fast whitelist + parallel checks + loading state + 7s guard
 (function(){
 const $=s=>document.querySelector(s);
 const titleBox=$("#title"),blurbBox=$("#blurb"),genreSel=$("#genreSel");
 const detailBtn=$("#detailBtn"),relatedBtn=$("#relatedBtn"),openBtn=$("#openBtn"),
       nextBtn=$("#nextBtn"),backBtn=$("#backBtn"),clearBtn=$("#clearBtn"),
       maintext=$("#maintext"),altview=$("#altview");
-let current=null;const V='v20_3';
+let current=null;const V='v20_4';
 
-// persistent install id (startup diversity across reinstalls)
+// install id for diversity
 if(!localStorage.getItem('siren_install_id')){
   localStorage.setItem('siren_install_id',[Date.now().toString(36),crypto.getRandomValues(new Uint32Array(1))[0].toString(36)].join('-'));
 }
@@ -15,10 +15,7 @@ const INSTALL_ID = localStorage.getItem('siren_install_id');
 
 // storage keys
 const SEEN_TITLES='seen_titles_'+V, SEEN_BLURBS='seen_blurbs_'+V, DAY_KEY='seen_day_'+V;
-const CURSOR_KEY='cat_cursor_'+V; // per-subcat cursor
-const RECENT_TITLES='recent_titles_'+V; // last 40 titles to avoid immediate repeats
-
-// daily reset (keep last 5k)
+const CURSOR_KEY='cat_cursor_'+V; const RECENT_TITLES='recent_titles_'+V;
 function today(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
 function loadJ(k,f){try{return JSON.parse(localStorage.getItem(k)||JSON.stringify(f))}catch{return f}}
 function saveJ(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
@@ -35,7 +32,7 @@ let seenBlurbs=new Set(loadJ(SEEN_BLURBS,[]));
 let recentTitles=loadJ(RECENT_TITLES,[]);
 let cursorMap=loadJ(CURSOR_KEY,{});
 
-// genre -> whitelist category prefixes (Japanese Wikipedia)
+// whitelist roots
 const GENRE_WHITELIST = {
   "科学": [
     "Category:科学","Category:物理学","Category:化学","Category:生物学","Category:地学",
@@ -52,7 +49,6 @@ const GENRE_WHITELIST = {
   "文学": ["Category:文学","Category:小説","Category:詩","Category:批評","Category:比較文学"]
 };
 
-// helper
 function bust(u){return u+(u.includes('?')?'&':'?')+'t='+Date.now()}
 async function jget(u){
   const controller=new AbortController(); const id=setTimeout(()=>controller.abort(),10000);
@@ -72,14 +68,13 @@ function norm(d){
 }
 function esc(str){return String(str).replace(/[&<>"']/g,s=>s==='&'?'&amp;':s==='<'?'&lt;':s==='>'?'&gt;':s==='"'?'&quot;':'&#39;')}
 async function sSeed(){
-  const n=Math.floor(Date.now()/1e3),p=(performance.now()*1e3|0)&0xffffffff,r=crypto.getRandomValues(new Uint32Array(2)),u=navigator.userAgent+INSTALL_ID;
-  const b=await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${n}|${p}|${r[0]}|${r[1]}|${u}`));
-  const dv=new DataView(b); return (BigInt(dv.getUint32(0))<<32n)|BigInt(dv.getUint32(4));
+  const n=Math.floor(Date.now()/1e3),p=(performance.now()*1e3|0)&0xffffffff,r=crypto.getRandomValues(new Uint32Array(2)),u=navigator.userAgent+localStorage.getItem('siren_install_id');
+  const b=await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${n}|${p}|${r[0]}|${r[1]}|${u}`)); const dv=new DataView(b);
+  return (BigInt(dv.getUint32(0))<<32n)|BigInt(dv.getUint32(4));
 }
 function m32(a){return function(){let t=a+=0x6D2B79F5;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296}}
 function shuffle(a,s){const r=m32(Number(s&0xffffffffn)||1);for(let i=a.length-1;i>0;i--){const j=(r()*(i+1))|0;[a[i],a[j]]=[a[j],a[i]]}return a}
 
-// category paging (members)
 async function catMembers(cat, cont=""){
   const u='https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle='+encodeURIComponent(cat)+'&cmtype=page&cmnamespace=0&cmlimit=100&origin=*'+(cont?('&cmcontinue='+encodeURIComponent(cont)):'');
   const d=await jget(u);
@@ -87,7 +82,6 @@ async function catMembers(cat, cont=""){
   const next=(d.continue&&d.continue.cmcontinue)||"";
   return {titles:m.map(x=>x.title), cont: next};
 }
-// categories for a title (to enforce whitelist)
 async function titleCats(title){
   const u='https://ja.wikipedia.org/w/api.php?action=query&format=json&prop=categories&clshow=!hidden&titles='+encodeURIComponent(title)+'&origin=*';
   const d=await jget(u);
@@ -97,15 +91,31 @@ async function titleCats(title){
 }
 function allowedByWhitelist(genre, cats){
   const wl = GENRE_WHITELIST[genre] || [];
-  if(!wl.length) return true; // no restriction
+  if(!wl.length) return true;
   return cats.some(c => wl.some(prefix => c.startsWith(prefix)));
 }
 
-// Fetch titles for a genre using whitelist categories (multi roots), round-robin across roots
+// 並列検証（最大10並列）＋早期打ち切り
+async function filterAllowedParallel(genre, titles, need=80, sampleLimit=25){
+  const allowed=[]; let i=0;
+  const limit = 10;
+  async function worker(){
+    while(i<Math.min(titles.length, sampleLimit) && allowed.length<need){
+      const t = titles[i++];
+      try{
+        const cats = await titleCats(t);
+        if(allowedByWhitelist(genre, cats)) allowed.push(t);
+      }catch{}
+    }
+  }
+  const workers = Array.from({length:limit}, worker);
+  await Promise.all(workers);
+  return allowed.slice(0, need);
+}
+
 async function titlesForGenre(genre, seed, need=80){
   const roots = GENRE_WHITELIST[genre] || [];
-  if(!roots.length) return []; // fallback elsewhere
-  // pick a start root using seed & install id for diversity
+  if(!roots.length) return [];
   const start = Number(seed & 0xffffffffn) % roots.length;
   const order = roots.slice(start).concat(roots.slice(0,start));
 
@@ -114,20 +124,12 @@ async function titlesForGenre(genre, seed, need=80){
     const cur = (cursorMap[root]||"");
     const {titles, cont} = await catMembers(root, cur);
     cursorMap[root]=cont||""; saveJ(CURSOR_KEY, cursorMap);
-    // verify whitelist by checking categories (sample first 50 to limit traffic)
-    for(const t of titles){
-      if(seenTitles.has(t)) continue;
-      try{
-        const cats = await titleCats(t);
-        if(allowedByWhitelist(genre, cats)) acc.push(t);
-      }catch{}
-      if(acc.length>=need) break;
-    }
+    const notSeen = titles.filter(t=>!seenTitles.has(t) && recentTitles.indexOf(t)===-1);
+    const ok = await filterAllowedParallel(genre, notSeen, need-acc.length, 25);
+    acc.push(...ok);
     if(acc.length>=need) break;
   }
   shuffle(acc, seed^0x9abcdn);
-  // avoid very recent repeats
-  acc = acc.filter(t => recentTitles.indexOf(t) === -1);
   return acc;
 }
 
@@ -136,16 +138,7 @@ async function rndTitles(n=60){
   return ((d.query&&d.query.random)||[]).map(x=>x.title);
 }
 async function sumByTitle(t){ return norm(await jget('https://ja.wikipedia.org/api/rest_v1/page/summary/'+encodeURIComponent(t))); }
-async function relRobust(t){
-  try{ const d=await jget('https://ja.wikipedia.org/api/rest_v1/page/related/'+encodeURIComponent(t)); const r=(d.pages||[]).map(norm); if(r&&r.length) return r; }catch{}
-  try{ const d=await jget('https://ja.wikipedia.org/w/api.php?action=query&format=json&list=search&srsearch='+encodeURIComponent('morelike:\"'+t+'\"')+'&srlimit=9&srnamespace=0&origin=*'); const hits=(d.query&&d.query.search)||[]; const ts=hits.map(h=>h.title).filter(Boolean); const out=[]; for(const x of ts){ try{ out.push(await sumByTitle(x)); }catch{} } if(out.length) return out; }catch{}
-  try{ const d=await jget('https://ja.wikipedia.org/w/api.php?action=parse&format=json&page='+encodeURIComponent(t)+'&prop=links&origin=*'); const links=(d.parse&&d.parse.links)||[]; const ts=links.filter(l=>l.ns===0&&l['*']).slice(0,12).map(l=>l['*']); const out=[]; for(const x of ts){ try{ out.push(await sumByTitle(x)); }catch{} } if(out.length) return out; }catch{}
-  try{ const d=await jget('https://ja.wikipedia.org/w/api.php?action=opensearch&format=json&search='+encodeURIComponent(t)+'&limit=9&namespace=0&origin=*'); const ts=Array.isArray(d)&&Array.isArray(d[1])?d[1]:[]; const out=[]; for(const x of ts){ try{ out.push(await sumByTitle(x)); }catch{} } if(out.length) return out; }catch{}
-  try{ const d=await jget('https://ja.wikipedia.org/w/api.php?action=query&format=json&prop=categories&clshow=!hidden&titles='+encodeURIComponent(t)+'&origin=*'); const pages=d.query&&d.query.pages?Object.values(d.query.pages):[]; const cats=pages.length?(pages[0].categories||[]):[]; if(cats.length){ const cat=cats[0].title; const d2=await jget('https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle='+encodeURIComponent(cat)+'&cmtype=page&cmnamespace=0&cmlimit=9&origin=*'); const mem=(d2.query&&d2.query.categorymembers)||[]; const ts=mem.map(m=>m.title).filter(Boolean); const out=[]; for(const x of ts){ try{ out.push(await sumByTitle(x)); }catch{} } if(out.length) return out; } }catch{}
-  return [];
-}
 
-// heuristics to avoid repeated-looking blurbs
 function canonicalBlurb(s){ return s.replace(/\s+/g,'').replace(/[「」『』（）()［］\[\]、。・,\.]/g,'').toLowerCase(); }
 
 function showMain(){ maintext.hidden=false; altview.hidden=true; backBtn.hidden=true; }
@@ -162,7 +155,6 @@ async function pickNew(){
   }else{
     candidates = await titlesForGenre(g, seed, 80);
   }
-  // fallback mixing
   let tries=0;
   while(candidates.length===0 && tries<3){
     tries++;
@@ -172,17 +164,17 @@ async function pickNew(){
   }
   if(!candidates.length) return null;
 
-  // pick first that passes blurb uniqueness
   for(const t of candidates){
     try{
       const s = await sumByTitle(t);
       const cb = canonicalBlurb(s.blurb);
-      if(cb.length < 6) continue; // too trivial
+      if(cb.length < 6) continue;
       if(seenBlurbs.has(cb)) continue;
-      // genre enforcement at display-time too
       if(g!=='all'){
-        const cats = await titleCats(s.title);
-        if(!allowedByWhitelist(g, cats)) continue;
+        try{
+          const cats = await titleCats(s.title);
+          if(!allowedByWhitelist(g, cats)) continue;
+        }catch{ continue; }
       }
       return s;
     }catch{}
@@ -190,9 +182,49 @@ async function pickNew(){
   return null;
 }
 
-async function showOne(){
-  const s=await pickNew();
-  if(!s){ titleBox.textContent='（候補が見つかりません）'; blurbBox.textContent='ジャンルを変えるか、少し時間をおいて再試行してください。'; showMain(); return; }
+// NEXTの読み込み状態制御＋7秒ガード
+let loading=false, guardId=null;
+async function showOneWithGuard(){
+  if(loading) return;
+  loading=true;
+  nextBtn.disabled=true;
+  const prevTitle=titleBox.textContent;
+  titleBox.textContent="（読み込み中…）"; blurbBox.textContent="";
+  guardId=setTimeout(async ()=>{
+    // ガード発火: フォールバックでランダム提示
+    try{
+      const r = await rndTitles(40);
+      for(const t of r){
+        if(seenTitles.has(t)) continue;
+        const s = await sumByTitle(t);
+        const cb = canonicalBlurb(s.blurb);
+        if(cb.length>=6 && !seenBlurbs.has(cb)){ current=s; break; }
+      }
+      if(current){ renderAndMark(current); }
+      else { titleBox.textContent=prevTitle; blurbBox.textContent="（タイムアウト。再度お試しください）"; }
+    }catch{
+      titleBox.textContent=prevTitle; blurbBox.textContent="（タイムアウト。再度お試しください）";
+    }finally{
+      loading=false; nextBtn.disabled=false;
+    }
+  }, 7000);
+
+  try{
+    const s = await pickNew();
+    if(s){
+      clearTimeout(guardId); guardId=null;
+      renderAndMark(s);
+    }else{
+      titleBox.textContent="（候補が見つかりません）";
+      blurbBox.textContent="ジャンルを変えるか、少し時間をおいて再試行してください。";
+    }
+  }finally{
+    loading=false; nextBtn.disabled=false;
+    if(guardId){ clearTimeout(guardId); guardId=null; }
+  }
+}
+
+function renderAndMark(s){
   current=s;
   const cb = canonicalBlurb(s.blurb);
   seenTitles.add(s.title); saveJ(SEEN_TITLES, Array.from(seenTitles).slice(-100000));
@@ -203,7 +235,7 @@ async function showOne(){
 
 // events
 document.addEventListener('DOMContentLoaded', () => {
-  nextBtn.addEventListener('click',showOne);
+  nextBtn.addEventListener('click',showOneWithGuard);
   backBtn.addEventListener('click',showMain);
   clearBtn.addEventListener('click',()=>{ if(!altview.hidden) showMain(); });
   detailBtn.addEventListener('click',()=>{ if(!current) return;
@@ -213,7 +245,11 @@ document.addEventListener('DOMContentLoaded', () => {
     if(!current) return;
     showAlt("<h3>RELATED</h3><ul><li>loading…</li></ul>");
     try{
-      const rel=await relRobust(current.title);
+      const rel=await (async()=>{
+        // 簡易版: related APIのみ（速度優先）。必要なら多段フォールバックを戻せます。
+        const d=await jget('https://ja.wikipedia.org/api/rest_v1/page/related/'+encodeURIComponent(current.title));
+        return (d.pages||[]).map(norm);
+      })();
       if(!rel.length){ showAlt("<h3>RELATED</h3><ul><li>(no items)</li></ul>"); return; }
       const items=rel.slice(0,9).map((p,i)=>`<li>[${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${esc(p.title)}</a></li>`).join("");
       showAlt(`<h3>RELATED</h3><ul>${items}</ul>`);
@@ -226,7 +262,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if(u) window.open(u,'_blank','noopener');
   });
 
-  setTimeout(showOne, 300); // faster boot
+  setTimeout(showOneWithGuard, 300);
   if(location.protocol.startsWith('http')&&'serviceWorker'in navigator){
     navigator.serviceWorker.register('./serviceWorker.js').then(r=>{ if(r&&r.update) r.update(); }).catch(()=>{});
   }

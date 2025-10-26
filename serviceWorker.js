@@ -1,5 +1,5 @@
-// v20.3 cache bump
-const CACHE = 'siren-v20-3';
+// v20.4 cache bump
+const CACHE = 'siren-v20-4';
 const FILES = ['./index.html','./style.css','./script.js','./manifest.json'];
 self.addEventListener('install', e => { self.skipWaiting(); e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES))); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(keys => Promise.all(keys.map(k => k !== CACHE ? caches.delete(k) : null)))); self.clients.claim(); });
