@@ -1,4 +1,4 @@
-// v19.0: white background, show RELATED/MORE inside square, back button, genre/time-seed/no-repeat
+// v19.5: robust retry/timeout & safe UI fallbacks
 const titleBox = document.getElementById('title');
 const blurbBox = document.getElementById('blurb');
 const genreSel = document.getElementById('genreSel');
@@ -12,7 +12,7 @@ const maintext = document.getElementById('maintext');
 const altview = document.getElementById('altview');
 
 let current = null;
-const SEEN_KEY = "siren_seen_titles_v19_4";
+const SEEN_KEY = "siren_seen_titles_v19_5";
 const SEEN_LIMIT = 100000;
 let seenSet = new Set(loadJSON(SEEN_KEY, []));
 
@@ -46,13 +46,36 @@ function shuffleWithSeed(arr, seedBig){
   return arr;
 }
 function bust(u){ const sep = u.includes('?') ? '&' : '?'; return `${u}${sep}t=${Date.now()}`; }
-async function fetchJSON(url){
-  const res = await fetch(bust(url), { mode: "cors", headers: { "Accept": "application/json" }, cache: "no-store" });
-  if (!res.ok) throw new Error("HTTP " + res.status);
-  const ct = res.headers.get('content-type')||'';
-  if (!ct.includes('application/json')) throw new Error("Non-JSON");
-  return await res.json();
+
+// ---- 追加: タイムアウト & リトライつき fetchJSON ----
+async function fetchJSON(url, {timeoutMs=8000, retries=2} = {}){
+  let lastErr = null;
+  for (let attempt=0; attempt<=retries; attempt++){
+    const ctrl = new AbortController();
+    const timer = setTimeout(()=>ctrl.abort(), timeoutMs);
+    try{
+      const res = await fetch(bust(url), {
+        mode: "cors",
+        headers: { "Accept": "application/json" },
+        cache: "no-store",
+        signal: ctrl.signal
+      });
+      clearTimeout(timer);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const ct = (res.headers.get('content-type')||'').toLowerCase();
+      // 一部のエッジケースで problem+json を返すことがあるため緩めに許可
+      if (!ct.includes('application/json')) throw new Error("Non-JSON");
+      return await res.json();
+    }catch(e){
+      clearTimeout(timer);
+      lastErr = e;
+      // 429/503等は少し待って再試行
+      await new Promise(r=>setTimeout(r, 300 + 300*attempt));
+    }
+  }
+  throw lastErr || new Error("fetch failed");
 }
+
 function normalizeSummary(data){
   const title = data.title || "（無題）";
   const blurb = data.description ? `${data.description}` : (data.extract ? (data.extract.split("。")[0] + "。") : "（概要なし）");
@@ -114,46 +137,70 @@ function showAlt(html){
   backBtn.hidden = false;
 }
 
+// ---- 追加: フォールバックつき pickNew ----
 async function pickNew(){
   const g = genreSel.value;
   const seed = await timeSeed();
   let titles = [];
-  if (g === "all"){
+  try{
+    if (g === "all"){
+      titles = await getRandomTitles(40);
+      shuffleWithSeed(titles, seed);
+    } else {
+      titles = await getTitlesByGenre(g, seed);
+    }
+  }catch(e){
+    // ジャンル取得失敗時はランダムにフォールバック
     titles = await getRandomTitles(40);
     shuffleWithSeed(titles, seed);
-  } else {
-    titles = await getTitlesByGenre(g, seed);
   }
   titles = titles.filter(t => !seenSet.has(t));
   let tries=0;
   while (titles.length === 0 && tries < 5){
     tries++;
-    if (g === "all"){
+    try{
+      if (g === "all"){
+        titles = await getRandomTitles(40);
+        shuffleWithSeed(titles, seed + BigInt(tries));
+      } else {
+        titles = await getTitlesByGenre(g, seed + BigInt(tries));
+      }
+      titles = titles.filter(t => !seenSet.has(t));
+    }catch(e){
       titles = await getRandomTitles(40);
       shuffleWithSeed(titles, seed + BigInt(tries));
-    } else {
-      titles = await getTitlesByGenre(g, seed + BigInt(tries));
+      titles = titles.filter(t => !seenSet.has(t));
     }
-    titles = titles.filter(t => !seenSet.has(t));
   }
   if (!titles.length) return null;
   const title = titles[0];
-  const s = await fetchSummaryByTitle(title);
-  return s;
+  return await fetchSummaryByTitle(title);
 }
 
-function renderMain(s){
-  titleBox.textContent = `【 ${s.title} 】`;
-  blurbBox.textContent = s.blurb;
-  showMain();
-}
-
+// ---- 重要: UIが必ず何か表示されるように try/catch 追加 ----
 async function showOne(){
-  const s = await pickNew();
-  if (!s){ titleBox.textContent = "（候補が見つかりません）"; blurbBox.textContent="時間をおいて再試行してください。"; showMain(); return; }
-  current = s;
-  seenSet.add(s.title); saveSeen();
-  renderMain(s);
+  // 先にプレースホルダーを出して「空白」に見えないように
+  titleBox.textContent = "読み込み中…";
+  blurbBox.textContent = "接続状況を確認しています";
+  showMain();
+
+  try{
+    const s = await pickNew();
+    if (!s){
+      titleBox.textContent = "（候補が見つかりません）";
+      blurbBox.textContent = "時間をおいて再試行してください。";
+      return;
+    }
+    current = s;
+    seenSet.add(s.title); saveSeen();
+    titleBox.textContent = `【 ${s.title} 】`; 
+    blurbBox.textContent = s.blurb;
+  }catch(e){
+    titleBox.textContent = "（取得に失敗しました）";
+    blurbBox.textContent = "通信が混み合っています。しばらくしてから MORE / NEXT をお試しください。";
+  }finally{
+    showMain();
+  }
 }
 
 detailBtn.addEventListener('click', () => {
