@@ -4,7 +4,7 @@ html,body{height:100%}
 body{
   margin:0;background:#fff;color:#000;
   font:16px/1.6 'IBM Plex Mono','Courier New',ui-monospace,monospace;
-  font-variant-ligatures:none;display:grid;place-items:center;
+  display:grid;place-items:center;
 }
 .wrap{width:min(820px,94vw);display:grid;gap:14px;justify-items:center}
 #screen{width:min(94vw,820px);aspect-ratio:1/1;border:2px solid #000;display:grid;place-items:center;padding:16px;text-align:center;background:#fff;color:#000;overflow:auto}
@@ -20,5 +20,5 @@ body{
 .select-wrap{position:relative;display:flex;align-items:center;justify-content:center;cursor:pointer;font-family:'IBM Plex Mono','Courier New',ui-monospace,monospace;font-size:1rem;color:#000}
 .select-wrap .select-label{font-family:inherit;font-size:inherit;font-weight:500;color:#000;letter-spacing:.08em}
 .select-wrap::after{content:'▾';position:absolute;right:12px;font-size:14px;line-height:1;color:#000}
-.select-wrap select{position:absolute;inset:0;opacity:0;appearance:none;-webkit-appearance:none;-moz-appearance:none;cursor:pointer;font-family:inherit;font-size:inherit;color:#000;background:#fff;border:none;outline:0}
+.select-wrap select{position:absolute;inset:0;opacity:0;appearance:none;cursor:pointer}
 .select-wrap:focus-within,.btn:focus-visible{outline:2px dashed #000;outline-offset:2px}
