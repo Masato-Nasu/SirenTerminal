@@ -6,19 +6,16 @@ body { margin: 0; background: #000; color: #00ff00; font-family: "Courier New", 
 #output { white-space: pre-wrap; line-height: 1.55; flex: 1; overflow: auto; }
 a { color: #66ff66; }
 a:visited { color: #66cc66; }
-.banner { background: #220; border: 1px solid #0f0; padding: 8px 10px; }
-#logPanel { border: 1px solid #0f0; padding: 8px; }
-#log { white-space: pre-wrap; margin: 0; }
 
 .controls-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(120px, 120px));
+  grid-template-columns: repeat(auto-fill, minmax(140px, 140px));
   gap: 10px;
   align-content: start;
 }
 .btn {
-  width: 120px;
-  height: 44px;
+  width: 140px;
+  height: 48px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -30,19 +27,7 @@ a:visited { color: #66cc66; }
   user-select: none;
 }
 .btn:hover { background: #002400; }
-.badge { pointer-events: none; }
-
-.select-wrap { position: relative; padding: 0 8px; }
-.select-wrap > span { pointer-events: none; }
-.select-wrap select { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
-
-.checkbox { gap: 8px; }
-.checkbox input { margin-right: 6px; }
-
-.related { border: 1px solid #0f0; padding: 10px; }
+.related { border: 1px solid #0f0; padding: 10px; margin-top: 12px; }
 .related-head { display:flex; gap:10px; align-items:center; }
 #relatedList { list-style: none; padding-left: 0; margin: 6px 0 0; }
 #relatedList li { margin: 4px 0; }
-#relatedStatus { opacity: .85; }
-
-#footer { font-size: 12px; opacity: .85; }

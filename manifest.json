@@ -1,11 +1,11 @@
 {
-  "name": "Siren Terminal – Wikipedia版（ジャンルフィルタ）",
+  "name": "Siren Terminal – 展示モード",
   "short_name": "SirenTerminal",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#00FF00",
-  "version": "16.0.0",
+  "version": "19.0.0",
   "icons": [
     { "src": "assets/icon-192.png", "sizes": "192x192", "type": "image/png" },
     { "src": "assets/icon-512.png", "sizes": "512x512", "type": "image/png" }
