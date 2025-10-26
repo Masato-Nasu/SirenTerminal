@@ -237,38 +237,72 @@ function escapeHtml(str){
 
 
 
-// === v19.14 strict-related guard (UI不変更・無関係ネタ禁止) ==================
+// === v19.15 Related-Only Crawler Queue (UI非変更) ===========================
+// 目的: 24個目で枯渇しないアルゴリズムに変更（ランダム禁止、関連のみ）
 (function(){
-  const NG = "候補が見つかりません";
-  const TITLE_KEY = "siren_v19_14_last_title";
-  const RECENT_KEY = "siren_v19_14_recent";
-  const RECENT_WIN = 12; // 直近の重複回避用
+  const NG_TEXT = "候補が見つかりません";
   const titleEl = document.getElementById("titleBox") || document.getElementById("title") || document.querySelector(".title");
   const blurbEl = document.getElementById("blurbBox") || document.getElementById("blurb") || document.querySelector(".blurb");
+
+  const Q_KEY = "siren_v19_15_queue";
+  const SEEN_KEY = "siren_v19_15_seen";
+  const LAST_TITLE_KEY = "siren_v19_15_last_title";
+  const MAX_QUEUE = 48;     // 十分なプール
+  const MIN_REFILL = 12;    // 下回ったら補充
+  const SEEN_LIMIT = 800;   // 永久に膨らまないように制限
 
   function jget(k,d){ try{ return JSON.parse(localStorage.getItem(k) ?? "null") ?? d; }catch{return d;} }
   function jset(k,v){ localStorage.setItem(k, JSON.stringify(v)); }
 
-  function currentTitle(){
-    const t1 = (titleEl?.textContent || "").replace(/[【】]/g,"").trim();
-    const t2 = jget(TITLE_KEY, "");
-    return t1 || t2 || "";
+  function nowTitleFromUI(){
+    return (titleEl?.textContent || "").replace(/[【】]/g,"").trim();
+  }
+  function currentSeed(){
+    const ui = nowTitleFromUI();
+    if (ui) return ui;
+    const last = jget(LAST_TITLE_KEY, "");
+    if (last) return last;
+    return "月"; // 安全な既定シード
   }
   function rememberTitle(t){
-    if (!t) return;
-    jset(TITLE_KEY, t);
-    const hist = jget(RECENT_KEY, []);
-    hist.push(t);
-    jset(RECENT_KEY, hist.slice(-RECENT_WIN));
+    if (t) jset(LAST_TITLE_KEY, t);
   }
-  function isRecent(t){
-    return jget(RECENT_KEY, []).includes(t);
+
+  function pushSeen(title){
+    if (!title) return;
+    const seen = new Set(jget(SEEN_KEY, []));
+    seen.add(title);
+    const arr = Array.from(seen);
+    // サイズ制御（新しい方を残す）
+    if (arr.length > SEEN_LIMIT){
+      jset(SEEN_KEY, arr.slice(-Math.floor(SEEN_LIMIT*0.6)));
+    }else{
+      jset(SEEN_KEY, arr);
+    }
   }
-  function paint(item){
-    if (!item) return;
-    if (titleEl) titleEl.textContent = `【 ${item.title} 】`;
-    if (blurbEl) blurbEl.textContent = (item.extract || item.blurb || item.detail || "");
-    rememberTitle(item.title);
+  function isSeen(title){
+    const seen = jget(SEEN_KEY, []);
+    return seen.includes(title);
+  }
+
+  function loadQueue(){ return jget(Q_KEY, []); }
+  function saveQueue(q){ jset(Q_KEY, q.slice(0, MAX_QUEUE)); }
+  function enqueue(items){
+    const q = loadQueue();
+    for (const it of items){
+      if (!it?.title) continue;
+      if (isSeen(it.title)) continue;
+      if (q.find(x=>x.title===it.title)) continue;
+      q.push({ title: it.title, extract: it.extract || it.blurb || it.detail || "" });
+      if (q.length >= MAX_QUEUE) break;
+    }
+    saveQueue(q);
+  }
+  function dequeue(){
+    const q = loadQueue();
+    const it = q.shift();
+    saveQueue(q);
+    return it || null;
   }
 
   async function fetchJSONsafe(url){
@@ -280,54 +314,86 @@ function escapeHtml(str){
     }catch{ return null; }
   }
 
-  async function showRelatedOf(title){
-    if (!title) return false;
-    const q = encodeURIComponent(title);
-    // related first
-    const rel = await fetchJSONsafe(`https://ja.wikipedia.org/api/rest_v1/page/related/${q}`);
+  async function refillFrom(seedTitle){
+    const seed = seedTitle || currentSeed();
+    const qseed = encodeURIComponent(seed);
+    // 1) related(seed) を取得
+    const rel = await fetchJSONsafe(`https://ja.wikipedia.org/api/rest_v1/page/related/${qseed}`);
     const pages = (rel && rel.pages) ? rel.pages : [];
-    const picks = pages.filter(p => p?.title && !isRecent(p.title));
-    const p = (picks[0] || pages[0]);
-    if (p){
-      paint({ title:p.title, extract:p.extract || "" });
-      return true;
+    enqueue(pages);
+    // 2) キューが薄い場合は related() の先頭候補をさらに展開（BFS 2層）
+    if (loadQueue().length < MIN_REFILL && pages.length){
+      const hop = pages.slice(0,6); // 最大6件の見出しで展開
+      for (const p of hop){
+        const t = encodeURIComponent(p.title);
+        const rel2 = await fetchJSONsafe(`https://ja.wikipedia.org/api/rest_v1/page/related/${t}`);
+        const pages2 = (rel2 && rel2.pages) ? rel2.pages : [];
+        enqueue(pages2);
+        if (loadQueue().length >= MAX_QUEUE) break;
+      }
     }
-    // fallback: re-show summary of the SAME title (not random)
-    const sum = await fetchJSONsafe(`https://ja.wikipedia.org/api/rest_v1/page/summary/${q}`);
-    if (sum && (sum.extract || "").trim()){
-      paint({ title: sum.title || title, extract: sum.extract });
+    // 3) それでも空なら seed の summary を入れておく（必ず出せる）
+    if (loadQueue().length === 0){
+      const sum = await fetchJSONsafe(`https://ja.wikipedia.org/api/rest_v1/page/summary/${qseed}`);
+      if (sum){
+        enqueue([{ title: sum.title || seed, extract: sum.extract || "" }]);
+      }
+    }
+  }
+
+  async function ensureQueue(){
+    if (loadQueue().length < MIN_REFILL){
+      await refillFrom(currentSeed());
+    }
+  }
+
+  function paint(item){
+    if (!item) return;
+    if (titleEl) titleEl.textContent = `【 ${item.title} 】`;
+    if (blurbEl) blurbEl.textContent = (item.extract || "");
+    pushSeen(item.title);
+    rememberTitle(item.title);
+  }
+
+  async function showFromQueue(){
+    // 確実に何かを出す
+    await ensureQueue();
+    let it = dequeue();
+    if (!it){
+      await refillFrom(currentSeed());
+      it = dequeue();
+    }
+    if (it){
+      paint(it);
       return true;
     }
     return false;
   }
 
-  async function guard(){
+  async function guardAndServe(){
     const txt = (blurbEl?.textContent || "").trim();
-    if (txt && !txt.includes(NG)) {
-      const t = (titleEl?.textContent || "").replace(/[【】]/g,"").trim();
-      if (t) rememberTitle(t);
-      return;
+    if (!txt || txt.includes(NG_TEXT)){
+      await showFromQueue();
+    }else{
+      const t = nowTitleFromUI();
+      if (t) { pushSeen(t); rememberTitle(t); }
     }
-    // NG または空 → "関連のみ"で補正
-    const base = currentTitle();
-    await showRelatedOf(base);
   }
 
+  // 初回＆クリック後＆DOM更新ごとに guard
   function hook(){
-    // 初期/クリック/DOM更新すべてで短い遅延後にガード
-    setTimeout(guard, 100);
+    setTimeout(guardAndServe, 80);
     ["nextBtn","next","relBtn","relatedBtn"].forEach(id=>{
       const el = document.getElementById(id);
-      if (el) el.addEventListener("click", ()=> setTimeout(guard, 60));
+      if (el) el.addEventListener("click", ()=> setTimeout(guardAndServe, 60));
     });
-    const mo = new MutationObserver(()=> setTimeout(guard, 10));
+    const mo = new MutationObserver(()=> setTimeout(guardAndServe, 10));
     mo.observe(document.body, { childList:true, characterData:true, subtree:true });
   }
-
   if (document.readyState === "loading"){
     document.addEventListener("DOMContentLoaded", hook, {once:true});
   }else{
     hook();
   }
 })();
-// === end v19.14 =============================================================
+// === end v19.15 =============================================================
