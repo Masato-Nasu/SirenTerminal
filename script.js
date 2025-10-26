@@ -237,171 +237,143 @@ function escapeHtml(str){
 
 
 
-// === v19.17 CORS fix: switch to MediaWiki Action API (origin=*) =============
-// UIはそのまま。REST /page/related でCORSになる環境向けに、Action APIへ切替。
+// === v19.18 patch A: MediaWiki Action API + related-only queue (CORS-safe) ===
 (function(){
   const titleEl = document.getElementById("titleBox") || document.getElementById("title") || document.querySelector(".title");
   const blurbEl = document.getElementById("blurbBox") || document.getElementById("blurb") || document.querySelector(".blurb");
   const NG_TEXT = "候補が見つかりません";
 
-  // --- generic fetch with retries ---
-  async function fetchJSON_A(url, {retries=3, timeout=8000} = {}){
-    let last=null;
-    for (let a=0;a<=retries;a++){
-      const ctrl = new AbortController();
-      const timer = setTimeout(()=>ctrl.abort(), timeout);
-      try{
-        const r = await fetch(url + (url.includes('?')?'&':'?') + '_=' + Date.now(), {
-          cache:"no-store", signal: ctrl.signal
-        });
-        clearTimeout(timer);
-        const ct = (r.headers.get('content-type')||'').toLowerCase();
-        if (!r.ok || !ct.includes('application/json')) throw new Error('bad '+r.status);
-        return await r.json();
-      }catch(e){
-        clearTimeout(timer);
-        last=e;
-        await new Promise(res=>setTimeout(res, 350*(a+1)));
-      }
-    }
-    return null;
-  }
-
-  // --- Action API helpers (CORS: origin=*) ---
-  function enc(t){ return encodeURIComponent(t).replace(/%20/g,'_'); }
-
-  async function apiSummary(title){
-    // extracts (intro) as summary
-    const url = `https://ja.wikipedia.org/w/api.php?action=query&prop=extracts&explaintext&exintro&titles=${enc(title)}&format=json&origin=*`;
-    const j = await fetchJSON_A(url);
-    if (!j || !j.query || !j.query.pages) return null;
-    const pages = j.query.pages;
-    const k = Object.keys(pages)[0];
-    const p = pages[k];
-    return p && p.extract ? { title: p.title || title, extract: p.extract } : null;
-  }
-
-  async function apiRelated(title, limit=12){
-    // CirrusSearch morelike search for "related"
-    const url = `https://ja.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent('morelike:"'+title+'"')}&srlimit=${limit}&format=json&origin=*`;
-    const j = await fetchJSON_A(url);
-    if (!j || !j.query || !j.query.search) return [];
-    // Map into {title, extract} using a second summary fetch in parallel (best-effort)
-    const titles = j.query.search.map(x=>x.title).filter(Boolean);
-    const out = [];
-    // Try to get short extracts for each (parallel but limited)
-    const batch = titles.slice(0, limit);
-    for (const t of batch){
-      const s = await apiSummary(t);
-      out.push({ title: t, extract: s?.extract || "" });
-    }
-    return out;
-  }
-
-  // --- Queue (reuse v19.16 logic but call apiRelated/apiSummary) ---
   function jget(k,d){ try{ return JSON.parse(localStorage.getItem(k) ?? "null") ?? d; }catch{return d;} }
   function jset(k,v){ localStorage.setItem(k, JSON.stringify(v)); }
 
-  const Q_KEY = "siren_v19_17_queue";
-  const SEEN_KEY = "siren_v19_17_seen";
-  const SEEDS_KEY = "siren_v19_17_seeds";
-  const LAST_KEY = "siren_v19_17_last";
-  const MAX_QUEUE = 64;
-  const MIN_REFILL = 16;
-  const SEEN_LIMIT = 1200;
-  const SEED_RING = 8;
+  const Q_KEY='siren_v19_18_queue', SEEN_KEY='siren_v19_18_seen', SEEDS_KEY='siren_v19_18_seeds', LAST_KEY='siren_v19_18_last';
+  const MAX_QUEUE=64, MIN_REFILL=16, SEEN_LIMIT=1200, SEED_RING=8;
 
-  function nowTitleFromUI(){ return (titleEl?.textContent || "").replace(/[【】]/g,"").trim(); }
+  const nowTitle=()=> (titleEl?.textContent || "").replace(/[【】]/g,"").trim();
   function rememberTitle(t){
     if (!t) return;
-    jset(LAST_KEY, t);
-    const seeds = jget(SEEDS_KEY, []);
-    if (seeds[seeds.length-1] !== t){ seeds.push(t); }
-    jset(SEEDS_KEY, seeds.slice(-SEED_RING));
+    jset(LAST_KEY,t);
+    const s=jget(SEEDS_KEY,[]); if (s[s.length-1]!==t) s.push(t); jset(SEEDS_KEY,s.slice(-SEED_RING));
   }
   function seedCandidates(){
-    const s = jget(SEEDS_KEY, []);
-    const last = jget(LAST_KEY, "");
-    const arr = [];
-    const ui = nowTitleFromUI(); if (ui) arr.push(ui);
-    if (last) arr.push(last);
-    for (const x of s) if (!arr.includes(x)) arr.push(x);
-    if (arr.length===0) arr.push("月");
+    const arr=[]; const ui=nowTitle(); const last=jget(LAST_KEY,""); const s=jget(SEEDS_KEY,[]);
+    if (ui) arr.push(ui); if (last) arr.push(last); for (const x of s) if (!arr.includes(x)) arr.push(x);
+    if (!arr.length) arr.push("月");
     return arr.slice(-SEED_RING).reverse();
   }
-
   function pushSeen(t){
-    if (!t) return;
-    const seen = new Set(jget(SEEN_KEY, [])); seen.add(t);
-    const arr = Array.from(seen);
-    if (arr.length > SEEN_LIMIT) jset(SEEN_KEY, arr.slice(-Math.floor(SEEN_LIMIT*0.6)));
-    else jset(SEEN_KEY, arr);
+    if (!t) return; const set=new Set(jget(SEEN_KEY,[])); set.add(t);
+    const a=Array.from(set); if (a.length>SEEN_LIMIT) jset(SEEN_KEY,a.slice(-Math.floor(SEEN_LIMIT*0.6))); else jset(SEEN_KEY,a);
   }
-  function isSeen(t){ return jget(SEEN_KEY, []).includes(t); }
-
-  function loadQ(){ return jget(Q_KEY, []); }
-  function saveQ(q){ jset(Q_KEY, q.slice(0, MAX_QUEUE)); }
+  function isSeen(t){ return jget(SEEN_KEY,[]).includes(t); }
+  function loadQ(){ return jget(Q_KEY,[]); }
+  function saveQ(q){ jset(Q_KEY, q.slice(0,MAX_QUEUE)); }
   function enqueue(items){
-    const q = loadQ();
-    for (const it of items){
-      const t = it?.title; if (!t) continue;
+    const q=loadQ();
+    for(const it of items){
+      const t=it?.title; if(!t) continue;
       if (isSeen(t)) continue;
       if (q.find(x=>x.title===t)) continue;
-      q.push({ title: t, extract: (it.extract||"") });
-      if (q.length >= MAX_QUEUE) break;
+      q.push({ title:t, extract: (it.extract||"") });
+      if (q.length>=MAX_QUEUE) break;
     }
     saveQ(q);
   }
-  function dequeue(){ const q = loadQ(); const it = q.shift(); saveQ(q); return it || null; }
+  function dequeue(){ const q=loadQ(); const it=q.shift(); saveQ(q); return it||null; }
 
+  async function fetchJSON(url,{retries=3,timeout=8000}={}){
+    let last=null;
+    for(let a=0;a<=retries;a++){
+      const ctrl=new AbortController(); const timer=setTimeout(()=>ctrl.abort(),timeout);
+      try{
+        const r=await fetch(url+(url.includes('?')?'&':'?')+'_='+Date.now(),{cache:'no-store',signal:ctrl.signal});
+        clearTimeout(timer);
+        const ct=(r.headers.get('content-type')||'').toLowerCase();
+        if(!r.ok||!ct.includes('application/json')) throw new Error('bad '+r.status);
+        return await r.json();
+      }catch(e){ clearTimeout(timer); last=e; await new Promise(rs=>setTimeout(rs,300*(a+1))); }
+    }
+    return null;
+  }
+  const enc=t=>encodeURIComponent(t).replace(/%20/g,'_');
+
+  async function apiSummary(title){
+    const u=`https://ja.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles=${enc(title)}&format=json&origin=*`;
+    const j=await fetchJSON(u); if(!j?.query?.pages) return null;
+    const k=Object.keys(j.query.pages)[0]; const p=j.query.pages[k];
+    return p?.extract ? {title:p.title||title, extract:p.extract} : null;
+  }
+  async function apiRelated(title,limit=12){
+    const u=`https://ja.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent('morelike:"'+title+'"')}&srlimit=${limit}&format=json&origin=*`;
+    const j=await fetchJSON(u); if(!j?.query?.search) return [];
+    const titles=j.query.search.map(x=>x.title).filter(Boolean);
+    const out=[];
+    for(const t of titles.slice(0,limit)){
+      const s=await apiSummary(t);
+      out.push({title:t, extract:s?.extract||""});
+    }
+    return out;
+  }
   async function refill(){
-    const seeds = seedCandidates();
-    for (const s of seeds){
-      const rel = await apiRelated(s, 12);
+    const seeds=seedCandidates();
+    for(const s of seeds){
+      const rel=await apiRelated(s,12);
       if (rel.length) enqueue(rel);
-      else {
-        const sum = await apiSummary(s);
-        if (sum) enqueue([sum]);
-      }
-      if (loadQ().length >= MIN_REFILL) break;
+      else { const sum=await apiSummary(s); if (sum) enqueue([sum]); }
+      if (loadQ().length>=MIN_REFILL) break;
     }
-    if (loadQ().length === 0){
-      const base = seeds[0];
-      const sum = await apiSummary(base);
-      if (sum) enqueue([sum]);
-    }
+    if (loadQ().length===0){ const base=seeds[0]; const sum=await apiSummary(base); if (sum) enqueue([sum]); }
   }
-  async function ensureQ(){ if (loadQ().length < MIN_REFILL) await refill(); }
+  async function ensureQ(){ if (loadQ().length<MIN_REFILL) await refill(); }
 
-  function paint(it){
-    if (!it) return;
-    if (titleEl) titleEl.textContent = `【 ${it.title} 】`;
-    if (blurbEl) blurbEl.textContent = it.extract || "";
-    pushSeen(it.title); rememberTitle(it.title);
-  }
-
+  function paint(it){ if(!it) return; if(titleEl) titleEl.textContent=`【 ${it.title} 】`; if(blurbEl) blurbEl.textContent=it.extract||""; pushSeen(it.title); rememberTitle(it.title); }
   async function serve(){
-    const txt = (blurbEl?.textContent || "").trim();
-    if (!txt || txt.includes(NG_TEXT)){
-      await ensureQ();
-      let it = dequeue();
-      if (!it){ await refill(); it = dequeue(); }
-      if (it) paint(it);
-    }else{
-      const t = nowTitleFromUI(); if (t) { pushSeen(t); rememberTitle(t); }
-    }
+    const txt=(blurbEl?.textContent||"").trim();
+    if(!txt || txt.includes(NG_TEXT)){ await ensureQ(); let it=dequeue(); if(!it){ await refill(); it=dequeue(); } if(it) paint(it); }
+    else { const t=nowTitle(); if(t){ pushSeen(t); rememberTitle(t); } }
   }
-
   function hook(){
-    setTimeout(serve, 60);
-    ["nextBtn","next","relBtn","relatedBtn"].forEach(id=>{
-      const el = document.getElementById(id); if (el) el.addEventListener("click", ()=> setTimeout(serve, 40));
-    });
-    const mo = new MutationObserver(()=> setTimeout(serve, 10));
-    mo.observe(document.body, { childList:true, characterData:true, subtree:true });
+    setTimeout(serve,60);
+    ["nextBtn","next","relBtn","relatedBtn"].forEach(id=>{ const el=document.getElementById(id); if(el) el.addEventListener("click",()=>setTimeout(serve,40)); });
+    const mo=new MutationObserver(()=>setTimeout(serve,10)); mo.observe(document.body,{childList:true,characterData:true,subtree:true});
     setInterval(()=>{ ensureQ(); }, 3000);
   }
-  if (document.readyState === "loading"){ document.addEventListener("DOMContentLoaded", hook, {once:true}); }
-  else { hook(); }
+  if(document.readyState==="loading"){ document.addEventListener("DOMContentLoaded",hook,{once:true}); } else { hook(); }
 })();
-// === end v19.17 =============================================================
+
+
+// === v19.18 patch B: universal watchdog for "undefined" / NG message =========
+(function(){
+  const NG="候補が見つかりません";
+  const tEl=document.getElementById("titleBox")||document.getElementById("title")||document.querySelector(".title");
+  const bEl=document.getElementById("blurbBox")||document.getElementById("blurb")||document.querySelector(".blurb")||document.body;
+  const safe=(v,f="") => (typeof v==="string" && v.trim()) ? v : f;
+
+  async function apiSummary(title){
+    const u='https://ja.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles='+encodeURIComponent(title)+'&format=json&origin=*';
+    const j=await fetch(u,{cache:'no-store'}).then(r=>r.json()).catch(()=>null);
+    const pages=j?.query?.pages; if(!pages) return null; const k=Object.keys(pages)[0]; const p=pages[k];
+    return p ? { title: safe(p.title,title), extract: safe(p.extract,"") } : null;
+  }
+  async function apiRelatedTitle(base){
+    const u='https://ja.wikipedia.org/w/api.php?action=query&list=search&srlimit=1&srsearch='+encodeURIComponent('morelike:"'+base+'"')+'&format=json&origin=*';
+    const j=await fetch(u,{cache:'no-store'}).then(r=>r.json()).catch(()=>null);
+    return j?.query?.search?.[0]?.title || null;
+  }
+  async function recover(){
+    const base=safe((tEl?.textContent||"").replace(/[【】]/g,""),"月");
+    const rel=await apiRelatedTitle(base); const pick=safe(rel,base);
+    const sum=await apiSummary(pick);
+    const title=safe(sum?.title,base);
+    const extract=safe(sum?.extract,"（取得に失敗しました。少し待って再試行してください）");
+    if (tEl) tEl.textContent=`【 ${title} 】`;
+    if (bEl) bEl.textContent=extract;
+  }
+  function needFix(){
+    const txt=String(document.body.innerText||"");
+    return !txt.trim() || txt.includes(NG) || /undefined/.test(txt);
+  }
+  if (needFix()) recover();
+  new MutationObserver(()=>{ if(needFix()) recover(); })
+    .observe(document.body,{childList:true,subtree:true,characterData:true});
+})();
