@@ -9,7 +9,12 @@
 </head>
 <body>
   <main class="wrap">
-    <div id="title" role="status" aria-live="polite">起動中…</div>
+    <div id="screen">
+      <div id="title" role="status" aria-live="polite">起動中…</div>
+      <div id="detail"></div>
+      <ul id="relatedList"></ul>
+      <div class="credit">SOURCE: Wikipedia (CC BY-SA / GFDL)</div>
+    </div>
 
     <div class="stack">
       <label class="btn select-wrap">
@@ -34,13 +39,6 @@
       <button class="btn" id="nextBtn">NEXT</button>
       <button class="btn" id="clearBtn">CLEAR</button>
     </div>
-
-    <section id="panel">
-      <div class="panel-head">RELATED</div>
-      <ul id="relatedList"></ul>
-      <div id="detail"></div>
-      <div class="credit">SOURCE: Wikipedia (CC BY-SA / GFDL)</div>
-    </section>
   </main>
 
   <script src="script.js"></script>

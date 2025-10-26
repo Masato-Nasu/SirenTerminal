@@ -1,20 +1,39 @@
 *{box-sizing:border-box}
-:root{color-scheme:light dark;--fg:#111;--bg:#f7f7f7;--line:#111;--btnbg:transparent}
-@media (prefers-color-scheme:dark){:root{--fg:#eaeaea;--bg:#0b0b0b;--line:#eaeaea;--btnbg:transparent}}
+:root{color-scheme:dark;--fg:#00ff00;--bg:#000;--line:#00ff00;--btnfg:#111;--btnbg:#f7f7f7}
 html,body{height:100%}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 'IBM Plex Mono','Courier New',ui-monospace,monospace;display:grid;place-items:center}
-.wrap{width:min(760px,92vw);display:grid;gap:14px;justify-items:center}
-#title{width:100%;text-align:center;border:2px solid var(--line);padding:12px;letter-spacing:.06em;min-height:56px;display:grid;place-items:center}
+body{margin:0;background:#000;color:var(--fg);font:16px/1.5 'IBM Plex Mono','Courier New',ui-monospace,monospace;display:grid;place-items:center}
+.wrap{width:min(760px,94vw);display:grid;gap:14px;justify-items:center}
+
+/* 正方形スクリーン */
+#screen{
+  width:min(94vw,760px);
+  aspect-ratio:1/1;              /* ←正方形 */
+  border:2px solid var(--line);
+  background:#000;
+  color:var(--fg);
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:flex-start;
+  padding:14px;
+  gap:8px;
+  text-align:center;
+  overflow:auto;
+}
+#title{font-weight:600;letter-spacing:.06em}
+#detail{white-space:pre-wrap}
+#relatedList{list-style:none;margin:0;padding:0}
+#relatedList li{margin:2px 0}
+.credit{opacity:.75;font-size:12px;margin-top:auto}
+
 .stack{width:100%;display:grid;gap:10px}
-.btn{width:100%;height:48px;border:2px solid var(--line);background:var(--btnbg);color:var(--fg);letter-spacing:.08em}
-.btn:hover{background:rgba(127,127,127,.08)}
+.btn{
+  width:100%;height:48px;
+  border:2px solid var(--line);background:transparent;color:var(--fg);
+  letter-spacing:.08em
+}
+.btn:hover{background:rgba(0,255,0,.08)}
 .select-wrap{position:relative;display:grid;place-items:center}
 .select-wrap>span{pointer-events:none}
 .select-wrap select{position:absolute;inset:0;opacity:0;cursor:pointer}
-#panel{width:100%;border:2px solid var(--line);padding:10px}
-.panel-head{text-align:center;margin-bottom:6px;letter-spacing:.12em}
-#relatedList{list-style:none;margin:0 0 8px 0;padding:0;text-align:center}
-#relatedList li{margin:4px 0}
-#detail{white-space:pre-wrap;text-align:center}
-.credit{opacity:.7;text-align:center;margin-top:8px;font-size:12px}
-a{color:inherit;text-decoration:underline}
+a{color:var(--fg);text-decoration:underline}

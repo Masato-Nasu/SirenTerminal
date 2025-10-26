@@ -1,4 +1,4 @@
-// v18.7: time-seeded random, never repeat, no animation, no ban
+// v18.8: genre-pure selection + square screen + no animation/ban + time-seeded randomness
 const titleBox = document.getElementById('title');
 const genreSel = document.getElementById('genreSel');
 const detailBtn = document.getElementById('detailBtn');
@@ -10,32 +10,27 @@ const relatedList = document.getElementById('relatedList');
 const detailBox = document.getElementById('detail');
 
 let current = null;
-const SEEN_KEY = "siren_seen_titles_v18_7";
-const SEED_RING_KEY = "siren_seed_ring_v18_7";
+const SEEN_KEY = "siren_seen_titles_v18_8";
 const SEEN_LIMIT = 100000;
 let seenSet = new Set(loadJSON(SEEN_KEY, []));
 
 function loadJSON(key, fallback){ try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } }
 function saveJSON(key, value){ try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
-
 function saveSeen(){
   if (seenSet.size > SEEN_LIMIT){
-    // keep the newest half
     const keep = Array.from(seenSet).slice(-Math.floor(SEEN_LIMIT*0.8));
     seenSet = new Set(keep);
   }
   saveJSON(SEEN_KEY, Array.from(seenSet));
 }
 
-// ===== time-based seed (sec + perf + crypto) =====
 async function timeSeed(){
-  const nowSec = Math.floor(Date.now()/1000); // 秒単位
+  const nowSec = Math.floor(Date.now()/1000);
   const perf = (performance.now()*1000|0) & 0xffffffff;
   const rnd = crypto.getRandomValues(new Uint32Array(2));
   const str = `${nowSec}|${perf}|${rnd[0]}|${rnd[1]}|${navigator.userAgent}`;
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(str));
   const dv = new DataView(buf);
-  // 64-bit seed
   return (BigInt(dv.getUint32(0))<<32n) | BigInt(dv.getUint32(4));
 }
 function mulberry32(a){ return function(){ let t=a+=0x6D2B79F5; t=Math.imul(t^t>>>15,t|1); t^=t+Math.imul(t^t>>>7,t|61); return((t^t>>>14)>>>0)/4294967296; } }
@@ -64,18 +59,42 @@ function normalizeSummary(data){
   return { title, blurb, detail, url };
 }
 
-// random pages helper
+// ===== ジャンル別：Category:◯◯ からのみ取得 =====
+async function fetchCategoryBatch(catTitle, cmcontinue=""){
+  const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle=" + encodeURIComponent("Category:"+catTitle) + "&cmtype=page&cmnamespace=0&cmlimit=100&origin=*" + (cmcontinue ? "&cmcontinue="+encodeURIComponent(cmcontinue) : "");
+  const data = await fetchJSON(url);
+  const members = (data.query && data.query.categorymembers) ? data.query.categorymembers : [];
+  const cont = (data.continue && data.continue.cmcontinue) ? data.continue.cmcontinue : "";
+  return { titles: members.map(m=>m.title), cont };
+}
+
+async function getTitlesByGenre(genre, seed){
+  // 1〜7ステップランダム前進して100件取得
+  let cont = "";
+  const steps = Number((seed & 0xffn) % 7n) + 1;
+  for (let i=0;i<steps;i++){
+    const r = await fetchCategoryBatch(genre, cont);
+    cont = r.cont;
+    if (!cont) break;
+  }
+  const r2 = await fetchCategoryBatch(genre, cont);
+  let titles = r2.titles;
+  if (!titles.length) return [];
+  shuffleWithSeed(titles, seed);
+  return titles;
+}
+
 async function getRandomTitles(limit=40){
   const data = await fetchJSON("https://ja.wikipedia.org/w/api.php?action=query&format=json&list=random&rnnamespace=0&rnlimit="+limit+"&origin=*");
   const arr = (data.query && data.query.random) ? data.query.random : [];
   return arr.map(x => x.title);
 }
+
 async function fetchSummaryByTitle(title){
   const data = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(title));
   return normalizeSummary(data);
 }
 
-// related (robust)
 async function fetchRelatedRobust(title) {
   try { const d = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/related/" + encodeURIComponent(title)); const r = (d.pages || []).map(p => normalizeSummary(p)); if (r && r.length) return r; } catch(e){}
   try { const d = await fetchJSON("https://ja.wikipedia.org/w/api.php?action=query&format=json&list=search&srsearch=" + encodeURIComponent('morelike:"' + title + '"') + "&srlimit=7&srnamespace=0&origin=*"); const hits = (d.query && d.query.search) ? d.query.search : []; const titles = hits.map(h => h.title).filter(Boolean); const out=[]; for (const t of titles){ try{ out.push(await fetchSummaryByTitle(t)); }catch(e){} } if(out.length) return out; } catch(e){}
@@ -86,21 +105,28 @@ async function fetchRelatedRobust(title) {
 }
 
 async function pickNew(){
-  // 1) get batch of random titles
+  const g = genreSel.value;
   const seed = await timeSeed();
-  let titles = await getRandomTitles(40);
-  // shuffle with seed, then filter out seen ones
-  shuffleWithSeed(titles, seed);
+  let titles = [];
+  if (g === "all"){
+    titles = await getRandomTitles(40);
+    shuffleWithSeed(titles, seed);
+  } else {
+    titles = await getTitlesByGenre(g, seed);
+  }
   titles = titles.filter(t => !seenSet.has(t));
-  // if all seen, fetch again with a new seed (up to 5 tries)
-  let tries = 0;
+  let tries=0;
   while (titles.length === 0 && tries < 5){
     tries++;
-    titles = await getRandomTitles(40);
-    shuffleWithSeed(titles, seed + BigInt(tries));
+    if (g === "all"){
+      titles = await getRandomTitles(40);
+      shuffleWithSeed(titles, seed + BigInt(tries));
+    } else {
+      titles = await getTitlesByGenre(g, seed + BigInt(tries));
+    }
     titles = titles.filter(t => !seenSet.has(t));
   }
-  if (titles.length === 0) return null;
+  if (!titles.length) return null;
   const title = titles[0];
   const s = await fetchSummaryByTitle(title);
   return s;
@@ -114,43 +140,27 @@ function renderMain(s){
 
 async function showOne(){
   const s = await pickNew();
-  if (!s){ titleBox.textContent = "（候補が見つかりません。もう一度お試しください）"; return; }
+  if (!s){ titleBox.textContent = "（候補が見つかりません。ジャンルを変えるか時間をおいて再試行してください）"; return; }
   current = s;
-  seenSet.add(s.title); saveSeen(); // 永続記録→今後は出さない
+  seenSet.add(s.title); saveSeen();
   renderMain(s);
 }
 
-detailBtn.addEventListener('click', () => {
-  if (!current) return;
-  detailBox.textContent = `${current.detail}\n\n[WIKI] ${current.url}`;
-});
+detailBtn.addEventListener('click', () => { if (!current) return; detailBox.textContent = `${current.detail}\n\n[WIKI] ${current.url}`; });
 relatedBtn.addEventListener('click', async () => {
   if (!current) return;
   relatedList.innerHTML = `<li>loading…</li>`;
-  try {
-    const rel = await fetchRelatedRobust(current.title);
-    if (!rel.length){ relatedList.innerHTML = `<li>(no items)</li>`; return; }
-    relatedList.innerHTML = "";
-    rel.slice(0,7).forEach((p,i)=>{
-      const li = document.createElement('li');
-      li.innerHTML = `[${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${p.title}</a>`;
-      relatedList.appendChild(li);
-    });
-  } catch(e){
-    relatedList.innerHTML = `<li>(failed)</li>`;
-  }
+  try { const rel = await fetchRelatedRobust(current.title);
+    relatedList.innerHTML = rel.length ? "" : "<li>(no items)</li>";
+    rel.slice(0,7).forEach((p,i)=>{ const li=document.createElement('li'); li.innerHTML=`[${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${p.title}</a>`; relatedList.appendChild(li); });
+  } catch{ relatedList.innerHTML = "<li>(failed)</li>"; }
 });
-openBtn.addEventListener('click', () => {
-  const url = current?.url || (current?.title ? "https://ja.wikipedia.org/wiki/" + encodeURIComponent(current.title) : null);
-  if (url) window.open(url, '_blank', 'noopener');
-});
+openBtn.addEventListener('click', () => { const url = current?.url || (current?.title ? "https://ja.wikipedia.org/wiki/" + encodeURIComponent(current.title) : null); if (url) window.open(url,'_blank','noopener'); });
 nextBtn.addEventListener('click', () => { showOne(); });
-clearBtn.addEventListener('click', () => { relatedList.innerHTML = ""; detailBox.textContent = ""; });
+clearBtn.addEventListener('click', () => { relatedList.innerHTML=""; detailBox.textContent=""; });
 
-// first
 setTimeout(()=>{ showOne(); }, 400);
 
-// SW
 if (location.protocol.startsWith('http') && 'serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./serviceWorker.js').then(reg => { if (reg && reg.update) reg.update(); }).catch(()=>{});
+  navigator.serviceWorker.register('./serviceWorker.js').then(reg=>{ if (reg && reg.update) reg.update(); }).catch(()=>{});
 }
