@@ -237,158 +237,160 @@ function escapeHtml(str){
 
 
 
-// === v19.15 Related-Only Crawler Queue (UI非変更) ===========================
-// 目的: 24個目で枯渇しないアルゴリズムに変更（ランダム禁止、関連のみ）
+// === v19.16 related-only multi-seed queue (UI不変更) =========================
 (function(){
-  const NG_TEXT = "候補が見つかりません";
   const titleEl = document.getElementById("titleBox") || document.getElementById("title") || document.querySelector(".title");
   const blurbEl = document.getElementById("blurbBox") || document.getElementById("blurb") || document.querySelector(".blurb");
+  const NG_TEXT = "候補が見つかりません";
 
-  const Q_KEY = "siren_v19_15_queue";
-  const SEEN_KEY = "siren_v19_15_seen";
-  const LAST_TITLE_KEY = "siren_v19_15_last_title";
-  const MAX_QUEUE = 48;     // 十分なプール
-  const MIN_REFILL = 12;    // 下回ったら補充
-  const SEEN_LIMIT = 800;   // 永久に膨らまないように制限
-
+  // ---- storage helpers ----
   function jget(k,d){ try{ return JSON.parse(localStorage.getItem(k) ?? "null") ?? d; }catch{return d;} }
   function jset(k,v){ localStorage.setItem(k, JSON.stringify(v)); }
 
-  function nowTitleFromUI(){
-    return (titleEl?.textContent || "").replace(/[【】]/g,"").trim();
-  }
-  function currentSeed(){
-    const ui = nowTitleFromUI();
-    if (ui) return ui;
-    const last = jget(LAST_TITLE_KEY, "");
-    if (last) return last;
-    return "月"; // 安全な既定シード
-  }
+  const Q_KEY = "siren_v19_16_queue";
+  const SEEN_KEY = "siren_v19_16_seen";
+  const SEEDS_KEY = "siren_v19_16_seeds";
+  const LAST_KEY = "siren_v19_16_last";
+  const MAX_QUEUE = 64;
+  const MIN_REFILL = 16;
+  const SEEN_LIMIT = 1200;
+  const SEED_RING = 8;
+
+  function nowTitleFromUI(){ return (titleEl?.textContent || "").replace(/[【】]/g,"").trim(); }
   function rememberTitle(t){
-    if (t) jset(LAST_TITLE_KEY, t);
+    if (!t) return;
+    jset(LAST_KEY, t);
+    const seeds = jget(SEEDS_KEY, []);
+    if (seeds[seeds.length-1] !== t){ seeds.push(t); }
+    jset(SEEDS_KEY, seeds.slice(-SEED_RING));
+  }
+  function seedCandidates(){
+    const s = jget(SEEDS_KEY, []);
+    const last = jget(LAST_KEY, "");
+    const arr = [];
+    if (nowTitleFromUI()) arr.push(nowTitleFromUI());
+    if (last) arr.push(last);
+    for (const x of s) if (!arr.includes(x)) arr.push(x);
+    if (arr.length===0) arr.push("月");
+    return arr.slice(-SEED_RING).reverse(); // 新しい順
   }
 
-  function pushSeen(title){
-    if (!title) return;
+  function pushSeen(t){
+    if (!t) return;
     const seen = new Set(jget(SEEN_KEY, []));
-    seen.add(title);
+    seen.add(t);
     const arr = Array.from(seen);
-    // サイズ制御（新しい方を残す）
-    if (arr.length > SEEN_LIMIT){
-      jset(SEEN_KEY, arr.slice(-Math.floor(SEEN_LIMIT*0.6)));
-    }else{
-      jset(SEEN_KEY, arr);
-    }
+    if (arr.length > SEEN_LIMIT) jset(SEEN_KEY, arr.slice(-Math.floor(SEEN_LIMIT*0.6)));
+    else jset(SEEN_KEY, arr);
   }
-  function isSeen(title){
-    const seen = jget(SEEN_KEY, []);
-    return seen.includes(title);
-  }
+  function isSeen(t){ return jget(SEEN_KEY, []).includes(t); }
 
-  function loadQueue(){ return jget(Q_KEY, []); }
-  function saveQueue(q){ jset(Q_KEY, q.slice(0, MAX_QUEUE)); }
+  function loadQ(){ return jget(Q_KEY, []); }
+  function saveQ(q){ jset(Q_KEY, q.slice(0, MAX_QUEUE)); }
   function enqueue(items){
-    const q = loadQueue();
+    const q = loadQ();
     for (const it of items){
-      if (!it?.title) continue;
-      if (isSeen(it.title)) continue;
-      if (q.find(x=>x.title===it.title)) continue;
-      q.push({ title: it.title, extract: it.extract || it.blurb || it.detail || "" });
+      const t = it?.title;
+      if (!t) continue;
+      if (isSeen(t)) continue;
+      if (q.find(x=>x.title===t)) continue;
+      q.push({ title:t, extract: (it.extract||it.blurb||it.detail||"") });
       if (q.length >= MAX_QUEUE) break;
     }
-    saveQueue(q);
+    saveQ(q);
   }
   function dequeue(){
-    const q = loadQueue();
+    const q = loadQ();
     const it = q.shift();
-    saveQueue(q);
+    saveQ(q);
     return it || null;
   }
 
-  async function fetchJSONsafe(url){
-    try{
-      const r = await fetch(url + (url.includes('?')?'&':'?') + '_=' + Date.now(), { headers:{'Accept':'application/json'}, cache:'no-store' });
-      const ct = (r.headers.get('content-type')||'').toLowerCase();
-      if(!r.ok || !ct.includes('application/json')) throw new Error('bad');
-      return await r.json();
-    }catch{ return null; }
-  }
-
-  async function refillFrom(seedTitle){
-    const seed = seedTitle || currentSeed();
-    const qseed = encodeURIComponent(seed);
-    // 1) related(seed) を取得
-    const rel = await fetchJSONsafe(`https://ja.wikipedia.org/api/rest_v1/page/related/${qseed}`);
-    const pages = (rel && rel.pages) ? rel.pages : [];
-    enqueue(pages);
-    // 2) キューが薄い場合は related() の先頭候補をさらに展開（BFS 2層）
-    if (loadQueue().length < MIN_REFILL && pages.length){
-      const hop = pages.slice(0,6); // 最大6件の見出しで展開
-      for (const p of hop){
-        const t = encodeURIComponent(p.title);
-        const rel2 = await fetchJSONsafe(`https://ja.wikipedia.org/api/rest_v1/page/related/${t}`);
-        const pages2 = (rel2 && rel2.pages) ? rel2.pages : [];
-        enqueue(pages2);
-        if (loadQueue().length >= MAX_QUEUE) break;
+  // ---- robust fetch with retry/backoff ----
+  async function fetchJSONsafe(url, {retries=3, timeout=8000} = {}){
+    let last=null;
+    for (let a=0;a<=retries;a++){
+      const ctrl = new AbortController();
+      const timer = setTimeout(()=>ctrl.abort(), timeout);
+      try{
+        const r = await fetch(url + (url.includes('?')?'&':'?') + '_=' + Date.now(), {
+          headers:{'Accept':'application/json'}, cache:'no-store', signal: ctrl.signal
+        });
+        clearTimeout(timer);
+        const ct = (r.headers.get('content-type')||'').toLowerCase();
+        if (!r.ok || !ct.includes('application/json')) throw new Error('bad '+r.status);
+        return await r.json();
+      }catch(e){
+        clearTimeout(timer);
+        last=e;
+        await new Promise(r=>setTimeout(r, 300*(a+1)));
       }
     }
-    // 3) それでも空なら seed の summary を入れておく（必ず出せる）
-    if (loadQueue().length === 0){
-      const sum = await fetchJSONsafe(`https://ja.wikipedia.org/api/rest_v1/page/summary/${qseed}`);
-      if (sum){
-        enqueue([{ title: sum.title || seed, extract: sum.extract || "" }]);
+    return null;
+  }
+
+  // ---- refill strictly by related ----
+  async function refill(){
+    const seeds = seedCandidates();
+    for (const s of seeds){
+      const q = encodeURIComponent(s);
+      const rel = await fetchJSONsafe(`https://ja.wikipedia.org/api/rest_v1/page/related/${q}`);
+      const pages = (rel && rel.pages) ? rel.pages : [];
+      if (pages.length){
+        enqueue(pages);
+      }else{
+        // summaryだけでもキューに入れておく（同一タイトル＝無関係ではない）
+        const sum = await fetchJSONsafe(`https://ja.wikipedia.org/api/rest_v1/page/summary/${q}`);
+        if (sum) enqueue([{title: sum.title || s, extract: sum.extract || ""}]);
       }
+      if (loadQ().length >= MIN_REFILL) break;
+    }
+    // すべて失敗した場合、最後の種をもう一度 summary で埋める
+    if (loadQ().length === 0){
+      const base = seeds[0];
+      const sum = await fetchJSONsafe(`https://ja.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(base)}`);
+      enqueue([{title: (sum?.title)||base, extract: (sum?.extract)||""}]);
     }
   }
-
-  async function ensureQueue(){
-    if (loadQueue().length < MIN_REFILL){
-      await refillFrom(currentSeed());
-    }
+  async function ensureQ(){
+    if (loadQ().length < MIN_REFILL){ await refill(); }
   }
 
-  function paint(item){
-    if (!item) return;
-    if (titleEl) titleEl.textContent = `【 ${item.title} 】`;
-    if (blurbEl) blurbEl.textContent = (item.extract || "");
-    pushSeen(item.title);
-    rememberTitle(item.title);
+  function paint(it){
+    if (!it) return;
+    if (titleEl) titleEl.textContent = `【 ${it.title} 】`;
+    if (blurbEl) blurbEl.textContent = it.extract || "";
+    pushSeen(it.title);
+    rememberTitle(it.title);
   }
 
-  async function showFromQueue(){
-    // 確実に何かを出す
-    await ensureQueue();
-    let it = dequeue();
-    if (!it){
-      await refillFrom(currentSeed());
-      it = dequeue();
-    }
-    if (it){
-      paint(it);
-      return true;
-    }
-    return false;
-  }
-
-  async function guardAndServe(){
+  async function serve(){
+    // 空/NGなら必ず供給
     const txt = (blurbEl?.textContent || "").trim();
     if (!txt || txt.includes(NG_TEXT)){
-      await showFromQueue();
+      await ensureQ();
+      let it = dequeue();
+      if (!it){
+        await refill();
+        it = dequeue();
+      }
+      if (it) paint(it);
     }else{
-      const t = nowTitleFromUI();
-      if (t) { pushSeen(t); rememberTitle(t); }
+      const t = nowTitleFromUI(); if (t) { pushSeen(t); rememberTitle(t); }
     }
   }
 
-  // 初回＆クリック後＆DOM更新ごとに guard
+  // 初期、クリック後、DOM更新ごとに保険実行。
   function hook(){
-    setTimeout(guardAndServe, 80);
+    setTimeout(serve, 60);
     ["nextBtn","next","relBtn","relatedBtn"].forEach(id=>{
       const el = document.getElementById(id);
-      if (el) el.addEventListener("click", ()=> setTimeout(guardAndServe, 60));
+      if (el) el.addEventListener("click", ()=> setTimeout(serve, 40));
     });
-    const mo = new MutationObserver(()=> setTimeout(guardAndServe, 10));
+    const mo = new MutationObserver(()=> setTimeout(serve, 10));
     mo.observe(document.body, { childList:true, characterData:true, subtree:true });
+    // 定期再補充（万一の飢餓回避）
+    setInterval(()=>{ ensureQ(); }, 3000);
   }
   if (document.readyState === "loading"){
     document.addEventListener("DOMContentLoaded", hook, {once:true});
@@ -396,4 +398,4 @@ function escapeHtml(str){
     hook();
   }
 })();
-// === end v19.15 =============================================================
+// === end v19.16 =============================================================
