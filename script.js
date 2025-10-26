@@ -1,4 +1,4 @@
-// v11: 起動ごとに違う表示（localStorageで既出を保存）、関連5段フォールバック、ログ強化
+// v13: 起動時の重複を必ず回避（list=random 優先）、LAST_KEYで直前を避ける
 
 const output = document.getElementById('output');
 const detailBtn = document.getElementById('detailBtn');
@@ -14,28 +14,43 @@ const logPanel = document.getElementById('logPanel');
 const logView = document.getElementById('log');
 const banner = document.getElementById('banner');
 
+const relatedStatus = document.getElementById('relatedStatus');
+const relatedList = document.getElementById('relatedList');
+
 let timer = null;
+let pauseTimeout = null;
 let current = null;
 const historyBuf = [];
 const categoryCache = {};
-const SEEN_KEY = "siren_seen_titles_v11";
-const SEEN_LIMIT = 300;
+
+const SEEN_KEY_V13 = "siren_seen_titles_v13";
+const SEEN_KEY_V11 = "siren_seen_titles_v11"; // 旧キーも参照
+const LAST_KEY = "siren_last_title_v13";
+const SEEN_LIMIT = 400;
+
 let seenTitles = new Set(loadSeen());
+let lastTitle = loadLast();
 
 if (location.protocol === 'file:') banner.hidden = false;
 
 function loadSeen(){
   try {
-    const raw = localStorage.getItem(SEEN_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw);
+    const v13 = JSON.parse(localStorage.getItem(SEEN_KEY_V13) || "[]");
+    const v11 = JSON.parse(localStorage.getItem(SEEN_KEY_V11) || "[]");
+    return [...new Set([...(v13||[]), ...(v11||[])])];
   } catch { return []; }
 }
 function saveSeen(){
   try {
     const arr = Array.from(seenTitles).slice(-SEEN_LIMIT);
-    localStorage.setItem(SEEN_KEY, JSON.stringify(arr));
+    localStorage.setItem(SEEN_KEY_V13, JSON.stringify(arr));
   } catch {}
+}
+function loadLast(){
+  try { return localStorage.getItem(LAST_KEY) || ""; } catch { return ""; }
+}
+function saveLast(t){
+  try { localStorage.setItem(LAST_KEY, t || ""); } catch {}
 }
 
 function logLine(...args){
@@ -46,7 +61,6 @@ function logLine(...args){
 
 function escapeHtml(s){ return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function appendText(text){ output.textContent += text; output.scrollTop = output.scrollHeight; }
-function appendHTML(html){ output.insertAdjacentHTML('beforeend', html); output.scrollTop = output.scrollHeight; }
 
 async function typeWriter(text, speed = 26) {
   return new Promise(resolve => {
@@ -67,33 +81,55 @@ function normalizeSummary(data) {
   return { title, blurb, detail, url };
 }
 
-function bust(u){
-  const sep = u.includes('?') ? '&' : '?';
-  return `${u}${sep}t=${Date.now()}`;
-}
+function bust(u){ const sep = u.includes('?') ? '&' : '?'; return `${u}${sep}t=${Date.now()}`; }
 
 async function fetchJSON(url, options){
   const full = bust(url);
   logLine("GET", full);
   const res = await fetch(full, options || { mode: "cors", headers: { "Accept": "application/json" }, cache: "no-store" });
   logLine("STATUS", res.status);
+  const ct = res.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) throw new Error(`Non-JSON response (${ct}) for ${url}`);
   if (!res.ok) throw new Error("HTTP " + res.status + " for " + url);
-  const data = await res.json();
-  return data;
+  return await res.json();
 }
 
-async function fetchRandomSummaryOnce(){
+// === 新：MediaWiki list=random を優先使用 ==========================
+async function mwRandomTitles(n=20){
+  const data = await fetchJSON("https://ja.wikipedia.org/w/api.php?action=query&format=json&list=random&rnnamespace=0&rnlimit=" + n + "&origin=*");
+  const arr = (data.query && data.query.random) ? data.query.random : [];
+  return arr.map(x => x.title).filter(Boolean);
+}
+
+async function pickFreshRandomTitle(){
+  // list=random で未表示かつ直前と違うものを選ぶ。最大3バッチ。
+  for (let batch=0; batch<3; batch++){
+    const titles = await mwRandomTitles(20);
+    const cand = titles.find(t => t !== lastTitle && !seenTitles.has(t));
+    if (cand) return cand;
+  }
+  // どうしても無理なら最後のバッチから lastTitle と違うもの
+  const titles = await mwRandomTitles(20);
+  const cand2 = titles.find(t => t !== lastTitle) || titles[0];
+  return cand2;
+}
+
+async function fetchSummaryByTitle(title){
+  const data = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(title));
+  return normalizeSummary(data);
+}
+
+async function fetchRandomSummaryPreferMW(){
+  const t = await pickFreshRandomTitle();
+  return await fetchSummaryByTitle(t);
+}
+
+// 旧 REST random はフォールバック用途に残す
+async function fetchRandomSummaryREST(){
   const data = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/random/summary");
   return normalizeSummary(data);
 }
-async function fetchRandomSummaryDedup(){
-  const MAX_TRY = 8;
-  for (let i = 0; i < MAX_TRY; i++){
-    const s = await fetchRandomSummaryOnce();
-    if (!seenTitles.has(s.title)) return s;
-  }
-  return await fetchRandomSummaryOnce();
-}
+// ================================================================
 
 async function restRelated(title) {
   const data = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/related/" + encodeURIComponent(title));
@@ -106,10 +142,8 @@ async function searchRelated(title) {
   const titles = hits.map(h => h.title).filter(Boolean);
   const pages = [];
   for (const t of titles) {
-    try {
-      const d = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t));
-      pages.push(normalizeSummary(d));
-    } catch(e) { logLine("summary fail", t, e.message); }
+    try { const d = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t)); pages.push(normalizeSummary(d)); }
+    catch(e) { logLine("summary fail", t, e.message); }
   }
   return pages;
 }
@@ -120,10 +154,8 @@ async function parseLinksRelated(title) {
   const titles = links.filter(l => l.ns === 0 && l['*']).slice(0, 10).map(l => l['*']);
   const pages = [];
   for (const t of titles) {
-    try {
-      const d = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t));
-      pages.push(normalizeSummary(d));
-    } catch(e) { logLine("summary fail", t, e.message); }
+    try { const d = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t)); pages.push(normalizeSummary(d)); }
+    catch(e) { logLine("summary fail", t, e.message); }
   }
   return pages;
 }
@@ -133,71 +165,40 @@ async function opensearchRelated(title){
   const titles = Array.isArray(data) && Array.isArray(data[1]) ? data[1] : [];
   const pages = [];
   for (const t of titles) {
-    try {
-      const d = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t));
-      pages.push(normalizeSummary(d));
-    } catch(e) { logLine("summary fail", t, e.message); }
+    try { const d = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t)); pages.push(normalizeSummary(d)); }
+    catch(e) { logLine("summary fail", t, e.message); }
   }
   return pages;
 }
 
 async function categoryNeighbors(title){
-  // ページのカテゴリ取得 → 最初のカテゴリからメンバーを拾う
   const data = await fetchJSON("https://ja.wikipedia.org/w/api.php?action=query&format=json&prop=categories&clshow=!hidden&titles=" + encodeURIComponent(title) + "&origin=*");
   const pages = data.query && data.query.pages ? Object.values(data.query.pages) : [];
   const cats = pages.length ? (pages[0].categories || []) : [];
   if (!cats.length) return [];
-  const cat = cats[0].title; // "Category:〇〇"
+  const cat = cats[0].title;
   const data2 = await fetchJSON("https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle=" + encodeURIComponent(cat) + "&cmtype=page&cmnamespace=0&cmlimit=10&origin=*");
   const members = (data2.query && data2.query.categorymembers) ? data2.query.categorymembers : [];
   const titles = members.map(m => m.title).filter(Boolean);
   const out = [];
   for (const t of titles) {
-    try {
-      const d = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t));
-      out.push(normalizeSummary(d));
-    } catch(e) { logLine("summary fail", t, e.message); }
+    try { const d = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t)); out.push(normalizeSummary(d)); }
+    catch(e) { logLine("summary fail", t, e.message); }
   }
   return out;
 }
 
 async function fetchRelatedRobust(title) {
-  try {
-    const r = await restRelated(title);
-    if (r && r.length) { logLine("related: via REST"); return r; }
-    logLine("REST related empty, trying search");
-  } catch(e) {
-    logLine("REST related failed:", e.message);
-  }
-  try {
-    const s = await searchRelated(title);
-    if (s && s.length) { logLine("related: via morelike search"); return s; }
-    logLine("Search related empty, trying parse-links");
-  } catch(e) {
-    logLine("Search related failed:", e.message);
-  }
-  try {
-    const p = await parseLinksRelated(title);
-    if (p && p.length) { logLine("related: via parse-links"); return p; }
-    logLine("Parse-links empty, trying opensearch");
-  } catch(e) {
-    logLine("Parse-links related failed:", e.message);
-  }
-  try {
-    const o = await opensearchRelated(title);
-    if (o && o.length) { logLine("related: via opensearch"); return o; }
-    logLine("Opensearch empty, trying category neighbors");
-  } catch(e) {
-    logLine("Opensearch failed:", e.message);
-  }
-  try {
-    const c = await categoryNeighbors(title);
-    logLine("related: via category neighbors, count:", c.length);
-    return c;
-  } catch(e) {
-    logLine("Category neighbors failed:", e.message);
-    return [];
-  }
+  try { const r = await restRelated(title); if (r && r.length) { logLine("related: via REST"); return r; } }
+  catch(e) { logLine("REST related failed:", e.message); }
+  try { const s = await searchRelated(title); if (s && s.length) { logLine("related: via morelike search"); return s; } }
+  catch(e) { logLine("Search related failed:", e.message); }
+  try { const p = await parseLinksRelated(title); if (p && p.length) { logLine("related: via parse-links"); return p; } }
+  catch(e) { logLine("Parse-links related failed:", e.message); }
+  try { const o = await opensearchRelated(title); if (o && o.length) { logLine("related: via opensearch"); return o; } }
+  catch(e) { logLine("Opensearch failed:", e.message); }
+  try { const c = await categoryNeighbors(title); logLine("related: via category neighbors", c.length); return c; }
+  catch(e) { logLine("Category neighbors failed:", e.message); return []; }
 }
 
 const GENRE_TO_CATEGORIES = {
@@ -234,33 +235,32 @@ async function fetchFromGenreDedup(genre) {
   const MAX_TRY = 12;
   for (let i = 0; i < MAX_TRY; i++){
     const t = pickRandom(list);
-    if (seenTitles.has(t)) continue;
-    const data = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t));
-    const s = normalizeSummary(data);
-    if (!seenTitles.has(s.title)) return s;
+    if (seenTitles.has(t) || t === lastTitle) continue;
+    const s = await fetchSummaryByTitle(t);
+    if (!seenTitles.has(s.title) && s.title !== lastTitle) return s;
   }
   const t = pickRandom(list);
-  const data = await fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t));
-  return normalizeSummary(data);
+  return await fetchSummaryByTitle(t);
 }
 
-async function showOne() {
+async function showOne(useMWPrefer=true) {
   try {
     const genre = genreSel.value;
-    current = (genre === "all") ? await fetchRandomSummaryDedup() : await fetchFromGenreDedup(genre);
+    current = (genre === "all")
+      ? (useMWPrefer ? await fetchRandomSummaryPreferMW() : await fetchRandomSummaryREST())
+      : await fetchFromGenreDedup(genre);
     historyBuf.push(current);
     seenTitles.add(current.title);
-    if (seenTitles.size > SEEN_LIMIT) {
-      // 古いものを間引く
-      const diff = seenTitles.size - SEEN_LIMIT;
-      const keep = Array.from(seenTitles).slice(diff);
-      seenTitles = new Set(keep);
-    }
     saveSeen();
+    lastTitle = current.title;
+    saveLast(lastTitle);
     if (historyBuf.length > 50) { historyBuf.shift(); }
     output.textContent = "";
     await typeWriter(`今日の概念：${current.title}\n\n`);
     await typeWriter(`${current.blurb}`);
+    // 関連クリア
+    relatedList.innerHTML = "";
+    relatedStatus.textContent = "";
   } catch (err) {
     logLine("showOne error:", err.message);
     const fallback = historyBuf.length ? historyBuf[Math.floor(Math.random() * historyBuf.length)] : null;
@@ -281,21 +281,28 @@ detailBtn.addEventListener('click', () => {
   appendText(`\n\n[詳細]\n${current.detail}\n\n[出典] ${current.url}`);
 });
 
+function pauseAutoResume(){
+  if (timer) { clearInterval(timer); timer = null; }
+  if (pauseTimeout) { clearTimeout(pauseTimeout); }
+  pauseTimeout = setTimeout(() => { setupIntervalFromSelect(); }, 20000);
+}
+
 relatedBtn.addEventListener('click', async () => {
   if (!current) return;
-  appendText(`\n\n[関連項目] 読み込み中...`);
+  pauseAutoResume();
+  relatedStatus.textContent = "読み込み中…";
+  relatedList.innerHTML = "";
   try {
     const rel = await fetchRelatedRobust(current.title);
-    output.textContent = output.textContent.replace(/\[関連項目\] 読み込み中\.\.\.$/, "[関連項目]");
-    if (!rel.length) { appendText(`\n- （関連が見つかりませんでした）`); return; }
-    let html = "";
+    if (!rel.length) { relatedStatus.textContent = "（見つかりませんでした）"; return; }
+    relatedStatus.textContent = `（${rel.length}件）`;
     rel.slice(0, 7).forEach((p, i) => {
-      const safeTitle = escapeHtml(p.title);
-      html += `\n- [${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${safeTitle}</a>`;
+      const li = document.createElement('li');
+      li.innerHTML = `[${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${escapeHtml(p.title)}</a>`;
+      relatedList.appendChild(li);
     });
-    appendHTML(html);
   } catch (e) {
-    appendText(`\n- （関連取得に失敗しました）`);
+    relatedStatus.textContent = "（取得に失敗しました）";
     logLine("related final error:", e.message);
   }
 });
@@ -306,13 +313,10 @@ openBtn.addEventListener('click', () => {
   else alert("まだ開ける項目がありません。もう一度お試しください。");
 });
 
-nextBtn.addEventListener('click', () => { if (timer) { clearInterval(timer); timer = null; } showOne().then(setupIntervalFromSelect); });
+nextBtn.addEventListener('click', () => { if (timer) { clearInterval(timer); timer = null; } showOne(true).then(setupIntervalFromSelect); });
 clearBtn.addEventListener('click', () => { output.textContent = ""; });
 
-genreSel.addEventListener('change', () => { 
-  if (timer) { clearInterval(timer); timer = null; } 
-  showOne().then(setupIntervalFromSelect); 
-});
+genreSel.addEventListener('change', () => { if (timer) { clearInterval(timer); timer = null; } showOne(true).then(setupIntervalFromSelect); });
 
 diagBtn.addEventListener('click', () => {
   const lines = [
@@ -320,7 +324,8 @@ diagBtn.addEventListener('click', () => {
     "オンライン: " + (navigator.onLine ? "Yes" : "No"),
     "タイトル: " + (current?.title || "（なし）"),
     "URL: " + (current?.url || "（なし）"),
-    "既出タイトル数: " + seenTitles.size
+    "既出タイトル数: " + seenTitles.size,
+    "直前タイトル: " + (lastTitle || "（なし）")
   ];
   appendText("\n\n" + lines.join("\n"));
 });
@@ -328,17 +333,18 @@ logBtn.addEventListener('click', () => { logPanel.open = !logPanel.open; });
 
 window.addEventListener('keydown', (e) => {
   if (e.key.toLowerCase() === 'o') { const url = current?.url || (current?.title ? "https://ja.wikipedia.org/wiki/" + encodeURIComponent(current.title) : null); if (url) window.open(url, '_blank', 'noopener'); }
-  if (e.key.toLowerCase() === 'n') { if (timer) { clearInterval(timer); timer = null; } showOne().then(setupIntervalFromSelect); }
+  if (e.key.toLowerCase() === 'n') { if (timer) { clearInterval(timer); timer = null; } showOne(true).then(setupIntervalFromSelect); }
 });
 
 function setupIntervalFromSelect() {
   if (timer) { clearInterval(timer); timer = null; }
   const val = parseInt(intervalSel.value, 10);
-  if (val > 0) timer = setInterval(showOne, val);
+  if (val > 0) timer = setInterval(() => showOne(true), val);
 }
 
-// 初期表示
-showOne().then(setupIntervalFromSelect);
+// === 初回起動：必ず list=random で直前回避 ==================
+showOne(true).then(setupIntervalFromSelect);
+// ===========================================================
 
 // PWA: SW登録 & 更新（localhost/HTTPSのみ）
 if (location.protocol.startsWith('http') && 'serviceWorker' in navigator) {

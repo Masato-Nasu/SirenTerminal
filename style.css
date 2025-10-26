@@ -5,6 +5,7 @@ body { margin: 0; background: #000; color: #00ff00; font-family: "Courier New", 
 #terminal { padding: 20px; min-height: 100%; display: flex; flex-direction: column; gap: 12px; }
 #output { white-space: pre-wrap; line-height: 1.55; flex: 1; overflow: auto; }
 a { color: #66ff66; }
+a:visited { color: #66cc66; }
 .banner { background: #220; border: 1px solid #0f0; padding: 8px 10px; }
 #logPanel { border: 1px solid #0f0; padding: 8px; }
 #log { white-space: pre-wrap; margin: 0; }
@@ -37,9 +38,7 @@ a { color: #66ff66; }
   position: relative;
   padding: 0 8px;
 }
-.select-wrap > span {
-  pointer-events: none;
-}
+.select-wrap > span { pointer-events: none; }
 .select-wrap select {
   position: absolute;
   inset: 0;
@@ -48,4 +47,11 @@ a { color: #66ff66; }
   height: 100%;
   cursor: pointer;
 }
+
+.related { border: 1px solid #0f0; padding: 10px; }
+.related-head { display:flex; gap:10px; align-items:center; }
+#relatedList { list-style: none; padding-left: 0; margin: 6px 0 0; }
+#relatedList li { margin: 4px 0; }
+#relatedStatus { opacity: .85; }
+
 #footer { font-size: 12px; opacity: .85; }
