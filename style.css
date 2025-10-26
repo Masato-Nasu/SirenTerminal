@@ -7,6 +7,6 @@ body { margin: 0; background: #000; color: #00ff00; font-family: "Courier New", 
 .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 button, select, label { font-family: inherit; color: #00ff00; background: #001a00; border: 1px solid #00ff00; padding: 8px 12px; cursor: pointer; }
 button:hover, select:hover { background: #002400; }
-label.interval { display: inline-flex; align-items: center; gap: 8px; }
+label.interval, label.genre { display: inline-flex; align-items: center; gap: 8px; }
 #footer { font-size: 12px; opacity: .85; }
 a { color: #66ff66; }

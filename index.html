@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Siren Terminal – Wikipedia版</title>
+  <title>Siren Terminal – Wikipedia版（ジャンルフィルタ）</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="stylesheet" href="style.css" />
 </head>
@@ -22,11 +22,27 @@
           <option value="0">停止</option>
         </select>
       </label>
+      <label class="genre">
+        ジャンル
+        <select id="genreSel" aria-label="ジャンルを選択">
+          <option value="all" selected>すべて</option>
+          <option value="哲学">哲学</option>
+          <option value="科学">科学</option>
+          <option value="数学">数学</option>
+          <option value="技術">技術</option>
+          <option value="芸術">芸術</option>
+          <option value="言語学">言語学</option>
+          <option value="心理学">心理学</option>
+          <option value="歴史">歴史</option>
+        </select>
+      </label>
+      <button id="openBtn" aria-label="Wikipediaで開く">WIKIを開く</button>
       <button id="nextBtn" aria-label="今すぐ次の項目を表示">今すぐ次へ</button>
       <button id="clearBtn" aria-label="表示をクリア">クリア</button>
     </div>
     <div id="footer">
       出典: <a href="https://ja.wikipedia.org/" target="_blank" rel="noopener">Wikipedia</a>（CC BY-SA / GFDL）
+      ／ ショートカット: <code>o</code> でWIKIを開く, <code>n</code> で次へ
     </div>
   </div>
   <script src="script.js"></script>

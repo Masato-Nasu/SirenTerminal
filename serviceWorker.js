@@ -1,4 +1,5 @@
-const CACHE_NAME = 'siren-terminal-wiki-v1';
+// v3: add 'WIKIを開く'機能のためキャッシュ名更新
+const CACHE_NAME = 'siren-terminal-wiki-v3';
 const FILES_TO_CACHE = [
   './index.html',
   './style.css',
@@ -8,9 +9,7 @@ const FILES_TO_CACHE = [
 
 self.addEventListener('install', event => {
   self.skipWaiting();
-  event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(FILES_TO_CACHE))
-  );
+  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(FILES_TO_CACHE)));
 });
 
 self.addEventListener('activate', event => {
@@ -27,7 +26,5 @@ self.addEventListener('fetch', event => {
     event.respondWith(fetch(req).catch(() => caches.match('./index.html')));
     return;
   }
-  event.respondWith(
-    caches.match(req).then(resp => resp || fetch(req))
-  );
+  event.respondWith(caches.match(req).then(resp => resp || fetch(req)));
 });
