@@ -10,7 +10,7 @@ body{
 }
 .wrap{width:min(820px,94vw);display:grid;gap:14px;justify-items:center}
 
-/* 正方形スクリーン（白地に黒文字） */
+/* 正方形スクリーン */
 #screen{
   width:min(94vw,820px);
   aspect-ratio:1/1;
@@ -38,9 +38,11 @@ body{
 .btn{
   width:100%;height:48px;
   border:2px solid #000;background:transparent;color:#000;
-  letter-spacing:.08em
+  letter-spacing:.08em;
+  font-weight:500;
 }
 .btn:hover{background:rgba(0,0,0,.06)}
+.btn.red{color:#d00;border-color:#d00}
 .select-wrap{position:relative;display:grid;place-items:center}
 .select-wrap>span{pointer-events:none}
 .select-wrap select{position:absolute;inset:0;opacity:0;cursor:pointer}
