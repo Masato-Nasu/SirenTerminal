@@ -41,7 +41,8 @@ body{
   border:2px solid #000;background:transparent;color:#000;
   letter-spacing:.08em;
   font-weight:500;
-  font-family:inherit;
+  font-family:'IBM Plex Mono','Courier New',ui-monospace,monospace;
+  font-size:1rem;
 }
 .btn:hover{background:rgba(0,0,0,.06)}
 .btn.red{color:#d00;border-color:#d00}
@@ -50,27 +51,30 @@ body{
 .select-wrap{
   position:relative;
   display:flex;align-items:center;justify-content:center;
-  gap:8px;
   cursor:pointer;
+  font-family:'IBM Plex Mono','Courier New',ui-monospace,monospace;
+  font-size:1rem;
+  color:#000;
 }
 .select-wrap .select-label{
-  font-family:inherit;font-size:1rem;line-height:1;letter-spacing:.08em;
+  font-family:inherit;
+  font-size:inherit;
+  font-weight:500;
+  color:#000;
+  letter-spacing:.08em;
 }
 .select-wrap::after{
   content:"▾";
   position:absolute; right:12px;
-  font-size:14px; line-height:1;
+  font-size:14px; line-height:1; color:#000;
 }
 .select-wrap select{
   position:absolute; inset:0;
-  opacity:0; /* クリック領域のみ提供し、見た目は上のラベルを使用 */
+  opacity:0;
   appearance:none; -webkit-appearance:none; -moz-appearance:none;
   cursor:pointer;
-  font-family:inherit; font-size:1rem; letter-spacing:.08em; line-height:48px;
-  background:transparent; color:transparent; /* 念のため */
-  border:none; outline:0;
+  font-family:inherit; font-size:inherit; color:#000;
+  background:#fff; border:none; outline:0;
 }
-
-/* フォーカス時の可視リング */
 .select-wrap:focus-within,
 .btn:focus-visible{ outline:2px dashed #000; outline-offset:2px }
