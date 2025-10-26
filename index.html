@@ -3,20 +3,44 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Siren Terminal – 展示モード</title>
+  <title>Siren Terminal – ジャンルあり展示モード</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div id="terminal" role="main">
     <div id="output" aria-live="polite"></div>
+
     <div class="controls-grid">
+      <label class="btn select-wrap" title="ジャンル">
+        <span>ジャンル</span>
+        <select id="genreSel" aria-label="ジャンルを選択">
+          <option value="all" selected>すべて</option>
+          <option value="哲学">哲学</option>
+          <option value="科学">科学</option>
+          <option value="数学">数学</option>
+          <option value="技術">技術</option>
+          <option value="芸術">芸術</option>
+          <option value="言語学">言語学</option>
+          <option value="心理学">心理学</option>
+          <option value="歴史">歴史</option>
+          <option value="文学">文学</option>
+        </select>
+      </label>
       <button class="btn" id="detailBtn">もっと詳しく</button>
       <button class="btn" id="relatedBtn">関連を見る</button>
       <button class="btn" id="openBtn">WIKIを開く</button>
       <button class="btn" id="nextBtn">今すぐ次へ</button>
       <button class="btn" id="clearBtn">クリア</button>
     </div>
+
+    <section id="relatedSection" class="related">
+      <div class="related-head">
+        <strong>関連項目</strong>
+        <small id="relatedStatus"></small>
+      </div>
+      <ul id="relatedList"></ul>
+    </section>
   </div>
   <script src="script.js"></script>
 </body>
