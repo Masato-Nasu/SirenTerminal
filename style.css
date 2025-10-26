@@ -10,4 +10,4 @@ button:hover, select:hover { background: #002400; }
 label.interval, label.genre { display: inline-flex; align-items: center; gap: 8px; }
 #footer { font-size: 12px; opacity: .85; }
 a { color: #66ff66; }
-.badge { display:inline-block; margin-left:6px; padding:2px 6px; border:1px solid #00ff00; }
+.banner { background: #220; border: 1px solid #0f0; padding: 8px 10px; }

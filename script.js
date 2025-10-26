@@ -1,6 +1,5 @@
-// Siren Terminal – Wikipedia版（v4 修正）
-// 注意: Service Worker と fetch の挙動のため、file:// ではなく http(s):// で開いてください。
-// 例: ターミナルで `python3 -m http.server` 実行 → http://localhost:8000/ にアクセス。
+// Siren Terminal – Wikipedia版（v5）
+// 修正: 関連をクリック可能なリンクで描画 / 関連取得のログ強化 / file:// 警告 / SW v5
 
 const output = document.getElementById('output');
 const detailBtn = document.getElementById('detailBtn');
@@ -10,15 +9,26 @@ const genreSel = document.getElementById('genreSel');
 const openBtn = document.getElementById('openBtn');
 const nextBtn = document.getElementById('nextBtn');
 const clearBtn = document.getElementById('clearBtn');
+const banner = document.getElementById('banner');
 
 let timer = null;
 let current = null;
 const historyBuf = [];
 const categoryCache = {};
 
+if (location.protocol === 'file:') {
+  banner.hidden = false;
+}
+
 function log(...args){ console.log("[SirenTerminal]", ...args); }
 
-function typeWriter(text, speed = 26) {
+// Append plain text
+function appendText(text){ output.textContent += text; }
+// Append safe HTML (titles escaped)
+function escapeHtml(s){ return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function appendHTML(html){ output.innerHTML += html; }
+
+async function typeWriter(text, speed = 26) {
   return new Promise(resolve => {
     let i = 0;
     const step = () => {
@@ -71,7 +81,6 @@ async function getCategoryMembersForGenre(genre) {
   const cats = GENRE_TO_CATEGORIES[genre] || [];
   let titles = [];
   for (const cat of cats) {
-    // 記事 namespace (=0) に限定。origin=* で CORS 許可。
     const url = `https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle=${encodeURIComponent('Category:' + cat)}&cmtype=page&cmnamespace=0&cmlimit=500&origin=*`;
     log("fetch category members:", url);
     const res = await fetch(url, { mode: "cors", cache: "no-store" });
@@ -124,34 +133,34 @@ async function showOne() {
 
 detailBtn.addEventListener('click', () => {
   if (!current) return;
-  output.textContent += `\n\n[詳細]\n${current.detail}\n\n[出典] ${current.url}`;
+  appendText(`\n\n[詳細]\n${current.detail}\n\n[出典] ${current.url}`);
 });
 
 relatedBtn.addEventListener('click', async () => {
   if (!current) return;
-  output.textContent += `\n\n[関連項目] 読み込み中…`;
+  appendText(`\n\n[関連項目] 読み込み中…`);
   try {
     const rel = await fetchRelated(current.title);
-    if (!rel.length) { output.textContent += `\n- （関連なし）`; return; }
-    output.textContent += "\n";
-    // クリックで開けるように、番号付きにして案内
+    // 置き換え：読み込み中を消し、リンクをHTMLで挿入
+    output.textContent = output.textContent.replace(/\[関連項目\] 読み込み中…$/, "[関連項目]");
+    if (!rel.length) { appendText(`\n- （関連なし）`); return; }
+    let html = "";
     rel.slice(0, 5).forEach((p, i) => {
-      output.textContent += `- [${i+1}] ${p.title}  ${p.url}\n`;
+      const safeTitle = escapeHtml(p.title);
+      const url = p.url;
+      html += `\n- [${i+1}] <a href="${url}" target="_blank" rel="noopener">${safeTitle}</a>`;
     });
-    output.textContent += `\n（リンクをクリックするとWikipediaが開きます）`;
+    appendHTML(html);
   } catch (e) {
-    output.textContent += `\n- （関連取得に失敗しました）`;
+    appendText(`\n- （関連取得に失敗しました）`);
     log("related error:", e);
   }
 });
 
 openBtn.addEventListener('click', () => {
   const url = current?.url || (current?.title ? "https://ja.wikipedia.org/wiki/" + encodeURIComponent(current.title) : null);
-  if (url) {
-    window.open(url, '_blank', 'noopener');
-  } else {
-    alert("まだ開ける項目がありません。もう一度お試しください。");
-  }
+  if (url) window.open(url, '_blank', 'noopener');
+  else alert("まだ開ける項目がありません。もう一度お試しください。");
 });
 
 nextBtn.addEventListener('click', () => { if (timer) { clearInterval(timer); timer = null; } showOne().then(setupIntervalFromSelect); });
@@ -169,11 +178,14 @@ function setupIntervalFromSelect() {
   if (val > 0) timer = setInterval(showOne, val);
 }
 
+// 初期表示
 showOne().then(setupIntervalFromSelect);
 
 // PWA: SW登録 & 更新（localhost/HTTPSのみ）
-if (location.protocol.startsWith('http') && 'serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./serviceWorker.js').then(reg => { if (reg && reg.update) reg.update(); }).catch(err => log("SW register error:", err));
+if (location.protocol.startswith ? location.protocol.startswith('http') : location.protocol.indexOf('http') === 0) {
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./serviceWorker.js').then(reg => { if (reg && reg.update) reg.update(); }).catch(err => log("SW register error:", err));
+  }
 } else {
   console.warn("Service Workerは https:// または http://localhost でのみ有効です。");
 }

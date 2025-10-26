@@ -1,5 +1,5 @@
-// v4 cache bump
-const CACHE_NAME = 'siren-terminal-wiki-v4';
+// v5 cache bump
+const CACHE_NAME = 'siren-terminal-wiki-v5';
 const FILES_TO_CACHE = [
   './index.html',
   './style.css',
