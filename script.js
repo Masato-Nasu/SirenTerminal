@@ -237,13 +237,11 @@ function escapeHtml(str){
 
 
 
-// === v19.11 watchdog (UI非変更・停止禁止) =====================
+// === v19.12 DOM-guard watchdog (UI非変更・強制代替) =========================
 (function(){
-  const T = document.getElementById("titleBox") || document.getElementById("title") || document.querySelector(".title");
-  const B = document.getElementById("blurbBox") || document.getElementById("blurb") || document.querySelector(".blurb");
-  const REL = document.getElementById("relBtn") || document.getElementById("relatedBtn");
-  const NXT = document.getElementById("nextBtn") || document.getElementById("next");
-  const NG = "候補が見つかりません";
+  const NG_TEXT = "候補が見つかりません";
+  const titleEl = document.getElementById("titleBox") || document.getElementById("title") || document.querySelector(".title");
+  const blurbEl = document.getElementById("blurbBox") || document.getElementById("blurb") || document.querySelector(".blurb");
 
   async function fetchJSONsafe(url){
     try{
@@ -264,38 +262,46 @@ function escapeHtml(str){
     { title:"反応拡散系", blurb:"模様形成を記述する数理モデル。", url:"https://ja.wikipedia.org/wiki/%E5%8F%8D%E5%BF%9C%E6%8B%A1%E6%95%A3%E6%96%B9%E7%A8%8B%E5%BC%8F" },
     { title:"色彩理論", blurb:"色の見えと調和の学理。", url:"https://ja.wikipedia.org/wiki/%E8%89%B2%E5%BD%A9%E5%AD%A6" }
   ];
-  function pickLocal(){
-    return LOCAL[(Math.random()*LOCAL.length)|0];
-  }
+  function pickLocal(){ return LOCAL[(Math.random()*LOCAL.length)|0]; }
   function paint(it, fb=false){
     if(!it) return;
-    if(T) T.textContent = `【 ${it.title} 】`;
-    if(B) B.textContent = it.blurb + (fb? "（フォールバック）": "");
+    if(titleEl) titleEl.textContent = `【 ${it.title} 】`;
+    if(blurbEl) blurbEl.textContent = it.blurb + (fb? "（フォールバック）": "");
   }
 
-  async function ensureContent(){
-    // 最大5回まで：オンライン→ローカルを組み合わせて再試行
-    for(let i=0;i<5;i++){
-      const b = (B?.textContent || "").trim();
-      if (b && !b.includes(NG)) return; // もうOK
-      // 試行
+  async function replaceIfNg(){
+    const b = ((blurbEl && blurbEl.textContent) || document.body.innerText || "").trim();
+    if (!b || b.includes(NG_TEXT)){
+      // 1) try online
       const on = await forceOnline();
-      if (on && on.blurb) { paint(on,false); continue; }
-      const loc = pickLocal();
-      paint(loc,true);
+      if (on && on.blurb){ paint(on,false); return true; }
+      // 2) fallback
+      paint(pickLocal(), true);
+      return true;
     }
+    return false;
   }
 
-  function hook(button){
-    if(!button) return;
-    button.addEventListener('click', ()=>{
-      // オリジナル処理の描画完了を待ってから監視
-      setTimeout(ensureContent, 60);
-    }, {capture:false});
-  }
-  hook(NXT);
-  hook(REL);
-  // 初期表示でも空なら補正
-  setTimeout(ensureContent, 150);
+  // 初期チェック
+  setTimeout(replaceIfNg, 120);
+
+  // DOM監視：どこかが "候補が見つからない" を描いた瞬間に差し替え
+  const obs = new MutationObserver(async (mut)=>{
+    for (const m of mut){
+      if (m.type === "childList" || m.type === "characterData"){
+        const txt = (blurbEl?.textContent || document.body.innerText || "");
+        if (!txt || txt.includes(NG_TEXT)){
+          await replaceIfNg();
+          break;
+        }
+      }
+    }
+  });
+  obs.observe(document.body, { childList:true, characterData:true, subtree:true });
+
+  // NEXT / RELATED の後処理としても保険
+  const relBtn  = document.getElementById("relBtn") || document.getElementById("relatedBtn");
+  const nextBtn = document.getElementById("nextBtn") || document.getElementById("next");
+  [relBtn, nextBtn].forEach(btn=> btn && btn.addEventListener('click', ()=> setTimeout(replaceIfNg, 80)));
 })();
-// === end v19.11 watchdog =====================================
+// === end v19.12 =============================================================
