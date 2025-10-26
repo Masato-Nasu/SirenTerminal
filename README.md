@@ -4,19 +4,7 @@
   <img src="assets/icon-512.png" width="160" alt="Siren Terminal icon" />
 </p>
 
-## 概要
-
-**Siren Terminal** は、知識の海を漂うセレンディピティ装置です。
-白と黒だけの静かな端末の中で、Wikipedia から無作為に抽出された概念が浮かび上がります。
-ユーザーはジャンルを選び、`NEXT` を押すことで新たな概念と出会い、`RELATED` でその連鎖を辿ることができます。
-
-> “偶然に出会うことが、思考の起点となる。”
-
----
-
-## スクリーンショット
-
-### 🔗 実行ページ
+## 🔗 実行ページ
 
 > [https://masato-nasu.github.io/SirenTerminal/](https://masato-nasu.github.io/SirenTerminal/)
 
@@ -26,11 +14,21 @@
 
 ---
 
-## スクリー
+## スクリーンショット
 
-> 実行画面（白背景・正方形スクリーン中央にタイトル＋要約、下部は GENRE → NEXT（赤）→ MORE → RELATED → OPEN WIKI → CLEAR の順）
+<p align="center">
+  <img src="assets/screenshot.png" alt="Siren Terminal Screenshot" width="480" />
+</p>
 
-![Siren Terminal Screenshot](assets/screenshot.png)
+---
+
+## 概要
+
+**Siren Terminal** は、知識の海を漂うセレンディピティ装置です。
+白と黒だけの静かな端末の中で、Wikipedia から無作為に抽出された概念が浮かび上がります。
+ユーザーはジャンルを選び、`NEXT` を押すことで新たな概念と出会い、`RELATED` でその連鎖を辿ることができます。
+
+> “偶然に出会うことが、思考の起点となる。”
 
 ---
 
