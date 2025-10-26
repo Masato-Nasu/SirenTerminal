@@ -237,103 +237,129 @@ function escapeHtml(str){
 
 
 
-// === v19.23: シングルトン初期化 + デバウンス＆ロック + 多重監視ガード =========
+// === v19.24 安定化パッチ（UI非変更） =========================================
 (function(){
-  // 二重起動防止（script.jsが複数回読み込まれても1回だけ有効化）
-  if (window.__SIREN_V1923_LOADED__) return;
-  window.__SIREN_V1923_LOADED__ = true;
+  if (window.__SIREN_V1924_LOADED__) return;
+  window.__SIREN_V1924_LOADED__ = true;
 
   const NG_RE = /候補が[\s　]*(?:出ません|見つかりません)/;
   const tEl = document.getElementById("titleBox") || document.getElementById("title") || document.querySelector(".title");
   const bEl = document.getElementById("blurbBox") || document.getElementById("blurb") || document.querySelector(".blurb") || document.body;
 
-  // 既存の供給関数がある前提（v19.2x 系）。なければ簡易フォールバックを使う。
-  const serveBase = window.__sirenServeV192x || window.__sirenServe || null;
-
-  // ====== 低侵襲の供給ラッパ ======
-  let inFlight = false;     // 同時実行ロック
-  let queued = false;       // デバウンス用フラグ
-  let lastPaintKey = "";    // 同一描画の抑制（ちらつき回避）
-  const SAFE_TXT = (v)=> (typeof v==="string" && v.trim()) ? v.trim() : "";
-  const NEED_FIX = ()=> {
-    const txt = String(document.body.innerText || "");
-    const content = SAFE_TXT(bEl?.textContent || "");
-    return !content || /undefined/.test(txt) || NG_RE.test(txt);
+  // ---- Fetch競合の中断 ----
+  let currentFetchCtrl = null;
+  window.__sirenAbortInFlight = function(){
+    try{ currentFetchCtrl?.abort(); }catch(_){}
+    currentFetchCtrl = null;
+  };
+  window.__sirenSafeFetchJSON = async function(url, opts={}){
+    // 直前の未完リクエストは中断（レース対策）
+    window.__sirenAbortInFlight();
+    currentFetchCtrl = new AbortController();
+    const { signal } = currentFetchCtrl;
+    const timeout = opts.timeout || 9000;
+    const timer = setTimeout(()=>currentFetchCtrl?.abort(), timeout);
+    try{
+      const r = await fetch(url + (url.includes('?')?'&':'?') + '_=' + Date.now(), { cache:'no-store', signal });
+      clearTimeout(timer);
+      const ct = (r.headers.get('content-type')||'').toLowerCase();
+      if (!r.ok || !ct.includes('application/json')) throw new Error('bad '+r.status);
+      const j = await r.json();
+      return j;
+    } finally {
+      clearTimeout(timer);
+      currentFetchCtrl = null;
+    }
   };
 
-  async function simpleFallback(){
-    // 簡易フォールバック：タイトルを維持しつつ summary を取り直し（Action API、CORS安全）
-    const base = SAFE_TXT((tEl?.textContent||"").replace(/[【】]/g,"")) || "月";
-    const u = 'https://ja.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles='
-            + encodeURIComponent(base) + '&format=json&origin=*';
-    try{
-      const r = await fetch(u, {cache:'no-store'});
-      const j = await r.json();
-      const pages = j?.query?.pages || {};
-      const k = Object.keys(pages)[0];
-      const p = pages[k];
-      const title = SAFE_TXT(p?.title || base);
-      const extract = SAFE_TXT(p?.extract || "");
-      if (tEl) tEl.textContent = `【 ${title} 】`;
-      if (bEl) bEl.textContent = extract;
-      lastPaintKey = title + "::" + extract.slice(0,32);
-    }catch(_){ /* no-op */ }
+  // ---- RAFバッチ + 最小表示時間ロック ----
+  let lockUntil = 0;
+  let rafQueued = false;
+  let pendingPaint = null;
+  const MIN_HOLD = 400; // ms: この間隔未満では描画を更新しない
+  let lastStable = { title:"", body:"", ts:0 };
+
+  function safeTxt(v){ return (typeof v==="string" ? v : "").trim(); }
+  function keyOf(tt,bb){ return tt+"::"+bb.slice(0,48); }
+
+  function commitPaint(tt, bb){
+    const now = Date.now();
+    if (now < lockUntil){
+      // ロック中は最新だけ保持して後で描く
+      pendingPaint = { tt, bb };
+      if (!rafQueued){
+        rafQueued = true;
+        requestAnimationFrame(()=>{
+          rafQueued = false;
+          if (pendingPaint){
+            const p = pendingPaint; pendingPaint = null;
+            commitPaint(p.tt, p.bb);
+          }
+        });
+      }
+      return;
+    }
+    // NG/空/undefined は描かない
+    if (!bb || NG_RE.test(bb) || /undefined/.test(bb)) return;
+
+    // 同一連続はスキップ
+    const k = keyOf(tt, bb);
+    if (k === keyOf(lastStable.title, lastStable.body)) return;
+
+    // 実描画
+    if (tEl) tEl.textContent = `【 ${tt} 】`;
+    if (bEl) bEl.textContent = bb;
+
+    lastStable = { title: tt, body: bb, ts: now };
+    lockUntil = now + MIN_HOLD;
   }
 
-  async function serveWrapper(force=false){
-    if (inFlight){ queued = true; return; }
-    inFlight = true;
-    try{
-      if (serveBase){
-        await serveBase(force);
+  // ---- 外部（既存ロジック）からの描画をフックして安定化 ----
+  // 既存コードはだいたい tEl.textContent / bEl.textContent を直接代入する想定。
+  // 我々のObserverが空描画や連続描画を検知して巻き戻す。
+  const obs = new MutationObserver(()=>{
+    const tt = safeTxt((tEl?.textContent||"").replace(/[【】]/g,""));
+    const bb = safeTxt(bEl?.textContent||"");
+    // 空/NG/同一なら直近の安定出力にロールバック
+    if (!bb || NG_RE.test(bb) || /undefined/.test(bb) || keyOf(tt,bb)===keyOf(lastStable.title,lastStable.body)){
+      if (lastStable.body){
+        const now = Date.now();
+        // ロックを延長してチラつきを抑える
+        lockUntil = Math.max(lockUntil, now + 120);
+        if (tEl) tEl.textContent = `【 ${lastStable.title} 】`;
+        if (bEl) bEl.textContent = lastStable.body;
       }
-      // 出力検査（毎回同じテキスト連発やNG文言を消し込む）
-      const title = SAFE_TXT((tEl?.textContent||"").replace(/[【】]/g,""));
-      const body  = SAFE_TXT(bEl?.textContent || "");
-      const key = title + "::" + body.slice(0,32);
-      if (!body || NG_RE.test(body) || key === lastPaintKey){
-        await simpleFallback();
-      }else{
-        lastPaintKey = key;
-      }
-    }finally{
-      inFlight = false;
-      if (queued){ queued = false; // デバウンス：背後で溜まっていた呼び出しを1回だけ実行
-        setTimeout(()=>serveWrapper(false), 40);
-      }
+      return;
+    }
+    // 正常な新規描画なら記録してロック
+    commitPaint(tt, bb);
+  });
+  obs.observe(document.body, { childList:true, characterData:true, subtree:true });
+
+  // ---- 初期の安定化（他パッチの出力より少し後に実行） ----
+  function stabilizeInit(){
+    const tt = safeTxt((tEl?.textContent||"").replace(/[【】]/g,""));
+    const bb = safeTxt(bEl?.textContent||"");
+    if (bb && !NG_RE.test(bb) && !/undefined/.test(bb)){
+      lastStable = { title: tt, body: bb, ts: Date.now() };
+      lockUntil = Date.now() + MIN_HOLD;
     }
   }
+  setTimeout(stabilizeInit, 120);
 
-  // ====== グローバルに公開（他パッチと整合させる） ======
-  window.__sirenServeV1923 = serveWrapper;
-
-  // ====== 多重監視のガード（既に追加済みのMutationObserverが複数あっても抑制） ======
-  // 新しいObserverは1つだけ。イベント発火はデバウンスで間引く。
-  let mo = null;
-  function hookOnce(){
-    // 初期1回
-    setTimeout(()=>serveWrapper(true), 60);
-
-    // ボタンイベント：複数回バインドされても serveWrapper 側でデバウンス済み
-    ["nextBtn","next","relBtn","relatedBtn"].forEach(id=>{
-      const el = document.getElementById(id);
-      if (el && !el.__siren_v1923_bound){
-        el.__siren_v1923_bound = true;
-        el.addEventListener('click', ()=> setTimeout(()=>serveWrapper(false), 30));
+  // ---- 可視/非可視の切替での暴発を抑止 ----
+  document.addEventListener('visibilitychange', ()=>{
+    if (document.visibilityState === 'hidden'){
+      // 非表示中は現在の安定出力を保持
+      lockUntil = Date.now() + MIN_HOLD;
+    }else{
+      // 表示に戻った直後にロールバック（空で戻るのを防ぐ）
+      if (lastStable.body){
+        if (tEl) tEl.textContent = `【 ${lastStable.title} 】`;
+        if (bEl) bEl.textContent = lastStable.body;
+        lockUntil = Date.now() + MIN_HOLD;
       }
-    });
-
-    // MutationObserver（既に他の版が動いていても、新しいのは1つだけ）
-    if (!mo){
-      mo = new MutationObserver(()=> setTimeout(()=>serveWrapper(false), 20));
-      mo.observe(document.body, {childList:true,characterData:true,subtree:true});
     }
-  }
-
-  if (document.readyState === "loading"){
-    document.addEventListener("DOMContentLoaded", hookOnce, {once:true});
-  }else{
-    hookOnce();
-  }
+  });
 })();
-// === end v19.23 =============================================================
+// === end v19.24 =============================================================
