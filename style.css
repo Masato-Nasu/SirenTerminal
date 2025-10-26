@@ -10,7 +10,6 @@ a:visited { color: #66cc66; }
 #logPanel { border: 1px solid #0f0; padding: 8px; }
 #log { white-space: pre-wrap; margin: 0; }
 
-/* 同じ大きさの四角いコントロール */
 .controls-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(120px, 120px));
@@ -33,20 +32,12 @@ a:visited { color: #66cc66; }
 .btn:hover { background: #002400; }
 .badge { pointer-events: none; }
 
-/* select をボタン風に */
-.select-wrap {
-  position: relative;
-  padding: 0 8px;
-}
+.select-wrap { position: relative; padding: 0 8px; }
 .select-wrap > span { pointer-events: none; }
-.select-wrap select {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  width: 100%;
-  height: 100%;
-  cursor: pointer;
-}
+.select-wrap select { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+
+.checkbox { gap: 8px; }
+.checkbox input { margin-right: 6px; }
 
 .related { border: 1px solid #0f0; padding: 10px; }
 .related-head { display:flex; gap:10px; align-items:center; }
