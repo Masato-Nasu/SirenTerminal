@@ -1,4 +1,4 @@
-// v18.9: monochrome, centered main text in square, genre-pure + time seed + no repeat
+// v19.0: white background, show RELATED/MORE inside square, back button, genre/time-seed/no-repeat
 const titleBox = document.getElementById('title');
 const blurbBox = document.getElementById('blurb');
 const genreSel = document.getElementById('genreSel');
@@ -6,12 +6,13 @@ const detailBtn = document.getElementById('detailBtn');
 const relatedBtn = document.getElementById('relatedBtn');
 const openBtn = document.getElementById('openBtn');
 const nextBtn = document.getElementById('nextBtn');
+const backBtn = document.getElementById('backBtn');
 const clearBtn = document.getElementById('clearBtn');
-const relatedList = document.getElementById('relatedList');
-const detailBox = document.getElementById('detail');
+const maintext = document.getElementById('maintext');
+const altview = document.getElementById('altview');
 
 let current = null;
-const SEEN_KEY = "siren_seen_titles_v18_9";
+const SEEN_KEY = "siren_seen_titles_v19_0";
 const SEEN_LIMIT = 100000;
 let seenSet = new Set(loadJSON(SEEN_KEY, []));
 
@@ -101,6 +102,18 @@ async function fetchRelatedRobust(title) {
   return [];
 }
 
+function showMain(){
+  maintext.hidden = false;
+  altview.hidden = true;
+  backBtn.hidden = true;
+}
+function showAlt(html){
+  altview.innerHTML = html;
+  maintext.hidden = true;
+  altview.hidden = false;
+  backBtn.hidden = false;
+}
+
 async function pickNew(){
   const g = genreSel.value;
   const seed = await timeSeed();
@@ -132,13 +145,12 @@ async function pickNew(){
 function renderMain(s){
   titleBox.textContent = `【 ${s.title} 】`;
   blurbBox.textContent = s.blurb;
-  relatedList.innerHTML = "";
-  detailBox.textContent = "";
+  showMain();
 }
 
 async function showOne(){
   const s = await pickNew();
-  if (!s){ titleBox.textContent = "（候補が見つかりません）"; blurbBox.textContent="時間をおいて再試行してください。"; return; }
+  if (!s){ titleBox.textContent = "（候補が見つかりません）"; blurbBox.textContent="時間をおいて再試行してください。"; showMain(); return; }
   current = s;
   seenSet.add(s.title); saveSeen();
   renderMain(s);
@@ -146,33 +158,32 @@ async function showOne(){
 
 detailBtn.addEventListener('click', () => {
   if (!current) return;
-  detailBox.textContent = `${current.detail}\n\n[WIKI] ${current.url}`;
+  const html = `<h3>DETAIL</h3>${escapeHtml(current.detail)}\n\n<p><a href="${current.url}" target="_blank" rel="noopener">WIKIを開く</a></p>`;
+  showAlt(html);
 });
 relatedBtn.addEventListener('click', async () => {
   if (!current) return;
-  relatedList.innerHTML = `<li>loading…</li>`;
+  showAlt("<h3>RELATED</h3><ul><li>loading…</li></ul>");
   try {
     const rel = await fetchRelatedRobust(current.title);
-    if (!rel.length){ relatedList.innerHTML = `<li>(no items)</li>`; return; }
-    relatedList.innerHTML = "";
-    rel.slice(0,7).forEach((p,i)=>{
-      const li = document.createElement('li');
-      li.innerHTML = `[${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${p.title}</a>`;
-      relatedList.appendChild(li);
-    });
+    if (!rel.length){ showAlt("<h3>RELATED</h3><ul><li>(no items)</li></ul>"); return; }
+    const items = rel.slice(0,9).map((p,i)=>`<li>[${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${escapeHtml(p.title)}</a></li>`).join("");
+    showAlt(`<h3>RELATED</h3><ul>${items}</ul>`);
   } catch(e){
-    relatedList.innerHTML = `<li>(failed)</li>`;
+    showAlt("<h3>RELATED</h3><ul><li>(failed)</li></ul>");
   }
 });
-openBtn.addEventListener('click', () => {
-  const url = current?.url || (current?.title ? "https://ja.wikipedia.org/wiki/" + encodeURIComponent(current.title) : null);
-  if (url) window.open(url, '_blank', 'noopener');
-});
+openBtn.addEventListener('click', () => { const url = current?.url || (current?.title ? "https://ja.wikipedia.org/wiki/" + encodeURIComponent(current.title) : null); if (url) window.open(url, '_blank', 'noopener'); });
 nextBtn.addEventListener('click', () => { showOne(); });
-clearBtn.addEventListener('click', () => { relatedList.innerHTML = ""; detailBox.textContent = ""; });
+backBtn.addEventListener('click', () => { showMain(); });
+clearBtn.addEventListener('click', () => { if (!altview.hidden) showMain(); });
 
 setTimeout(()=>{ showOne(); }, 400);
 
 if (location.protocol.startsWith('http') && 'serviceWorker' in navigator) {
   navigator.serviceWorker.register('./serviceWorker.js').then(reg=>{ if (reg && reg.update) reg.update(); }).catch(()=>{});
+}
+
+function escapeHtml(str){
+  return String(str).replace(/[&<>"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[s]));
 }
