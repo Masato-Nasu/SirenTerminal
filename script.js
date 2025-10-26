@@ -237,129 +237,121 @@ function escapeHtml(str){
 
 
 
-// === v19.24 安定化パッチ（UI非変更） =========================================
+// === v19.26 SAFE MODE: SW完全無効・依存ゼロで必ず表示（UI非変更） ==================
 (function(){
-  if (window.__SIREN_V1924_LOADED__) return;
-  window.__SIREN_V1924_LOADED__ = true;
+  if (window.__SIREN_V1926_LOADED__) return;
+  window.__SIREN_V1926_LOADED__ = true;
 
-  const NG_RE = /候補が[\s　]*(?:出ません|見つかりません)/;
+  // 0) どの環境でも落ちない SW 無効化（存在しても解除、register を無効化）
+  (async () => {
+    try {
+      if (typeof navigator!=='undefined' && 'serviceWorker' in navigator) {
+        try { const regs = await navigator.serviceWorker.getRegistrations(); for (const r of regs) await r.unregister(); } catch {}
+        try { navigator.serviceWorker.register = async ()=>({}); } catch {}
+      }
+    } catch {}
+  })();
+
   const tEl = document.getElementById("titleBox") || document.getElementById("title") || document.querySelector(".title");
   const bEl = document.getElementById("blurbBox") || document.getElementById("blurb") || document.querySelector(".blurb") || document.body;
+  const safeText = (v,f="") => (typeof v==="string" && v.trim()) ? v : f;
 
-  // ---- Fetch競合の中断 ----
-  let currentFetchCtrl = null;
-  window.__sirenAbortInFlight = function(){
-    try{ currentFetchCtrl?.abort(); }catch(_){}
-    currentFetchCtrl = null;
-  };
-  window.__sirenSafeFetchJSON = async function(url, opts={}){
-    // 直前の未完リクエストは中断（レース対策）
-    window.__sirenAbortInFlight();
-    currentFetchCtrl = new AbortController();
-    const { signal } = currentFetchCtrl;
-    const timeout = opts.timeout || 9000;
-    const timer = setTimeout(()=>currentFetchCtrl?.abort(), timeout);
+  // 1) 単発で必ず1件描画（ネット通っていれば Action API、だめなら固定文）
+  async function paintOne(baseTitle){
+    const base = safeText(baseTitle, "月");
+    const u = 'https://ja.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles='
+            + encodeURIComponent(base) + '&format=json&origin=*';
     try{
-      const r = await fetch(url + (url.includes('?')?'&':'?') + '_=' + Date.now(), { cache:'no-store', signal });
-      clearTimeout(timer);
-      const ct = (r.headers.get('content-type')||'').toLowerCase();
-      if (!r.ok || !ct.includes('application/json')) throw new Error('bad '+r.status);
+      const r = await fetch(u, {cache:'no-store'});
       const j = await r.json();
-      return j;
+      const pages = j?.query?.pages || {};
+      const k = Object.keys(pages)[0] || "";
+      const p = pages[k] || {};
+      const title = safeText(p.title, base);
+      const extract = safeText(p.extract, "（説明文の取得に失敗しました）");
+      if (tEl) tEl.textContent = `【 ${title} 】`;
+      if (bEl) bEl.textContent = extract;
+      return true;
+    }catch(_){
+      if (tEl) tEl.textContent = `【 ${base} 】`;
+      if (bEl) bEl.textContent = "（オフラインのため最小表示のみ）";
+      return false;
+    }
+  }
+
+  // 2) 科学カテゴリからの生成（軽量・依存なし）
+  async function fetchScienceBatch(limit=12){
+    const sci = "Category:%E8%87%AA%E7%84%B6%E7%A7%91%E5%AD%A6";
+    const api = `https://ja.wikipedia.org/w/api.php?action=query&list=categorymembers&cmtitle=${sci}&cmtype=page&cmlimit=${limit}&format=json&origin=*`;
+    const j = await fetch(api, {cache:'no-store'}).then(r=>r.json()).catch(()=>null);
+    const items = [];
+    const titles = j?.query?.categorymembers?.map(x=>x.title).filter(Boolean) || [];
+    for (const t of titles){
+      const u = 'https://ja.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles='
+              + encodeURIComponent(t) + '&format=json&origin=*';
+      const s = await fetch(u, {cache:'no-store'}).then(r=>r.json()).catch(()=>null);
+      const pages = s?.query?.pages || {};
+      const k = Object.keys(pages)[0] || "";
+      const p = pages[k] || {};
+      items.push({ title: safeText(p.title, t), extract: safeText(p.extract, "") });
+    }
+    return items;
+  }
+
+  let queue = []; // ストレージ不使用（毎回クリアでも動く）
+  let lock = false;
+  function nextFromQueue(){
+    while (queue.length){
+      const it = queue.shift();
+      if (it && it.title) return it;
+    }
+    return null;
+  }
+  async function refillIfNeeded(){
+    if (queue.length >= 8) return;
+    const batch = await fetchScienceBatch(20);
+    for (const it of batch){
+      if (!queue.find(x=>x.title===it.title)) queue.push(it);
+    }
+  }
+
+  async function showNext(){
+    if (lock) return; lock = true;
+    try {
+      await refillIfNeeded();
+      const it = nextFromQueue();
+      if (it){
+        const title = safeText(it.title,"");
+        const extract = safeText(it.extract,"");
+        if (title && extract){
+          if (tEl) tEl.textContent = `【 ${title} 】`;
+          if (bEl) bEl.textContent = extract;
+          return;
+        }
+      }
+      // キューが空/本文空なら単発フォールバック
+      const base = safeText((tEl?.textContent||"").replace(/[【】]/g,""), "月");
+      await paintOne(base);
     } finally {
-      clearTimeout(timer);
-      currentFetchCtrl = null;
-    }
-  };
-
-  // ---- RAFバッチ + 最小表示時間ロック ----
-  let lockUntil = 0;
-  let rafQueued = false;
-  let pendingPaint = null;
-  const MIN_HOLD = 400; // ms: この間隔未満では描画を更新しない
-  let lastStable = { title:"", body:"", ts:0 };
-
-  function safeTxt(v){ return (typeof v==="string" ? v : "").trim(); }
-  function keyOf(tt,bb){ return tt+"::"+bb.slice(0,48); }
-
-  function commitPaint(tt, bb){
-    const now = Date.now();
-    if (now < lockUntil){
-      // ロック中は最新だけ保持して後で描く
-      pendingPaint = { tt, bb };
-      if (!rafQueued){
-        rafQueued = true;
-        requestAnimationFrame(()=>{
-          rafQueued = false;
-          if (pendingPaint){
-            const p = pendingPaint; pendingPaint = null;
-            commitPaint(p.tt, p.bb);
-          }
-        });
-      }
-      return;
-    }
-    // NG/空/undefined は描かない
-    if (!bb || NG_RE.test(bb) || /undefined/.test(bb)) return;
-
-    // 同一連続はスキップ
-    const k = keyOf(tt, bb);
-    if (k === keyOf(lastStable.title, lastStable.body)) return;
-
-    // 実描画
-    if (tEl) tEl.textContent = `【 ${tt} 】`;
-    if (bEl) bEl.textContent = bb;
-
-    lastStable = { title: tt, body: bb, ts: now };
-    lockUntil = now + MIN_HOLD;
-  }
-
-  // ---- 外部（既存ロジック）からの描画をフックして安定化 ----
-  // 既存コードはだいたい tEl.textContent / bEl.textContent を直接代入する想定。
-  // 我々のObserverが空描画や連続描画を検知して巻き戻す。
-  const obs = new MutationObserver(()=>{
-    const tt = safeTxt((tEl?.textContent||"").replace(/[【】]/g,""));
-    const bb = safeTxt(bEl?.textContent||"");
-    // 空/NG/同一なら直近の安定出力にロールバック
-    if (!bb || NG_RE.test(bb) || /undefined/.test(bb) || keyOf(tt,bb)===keyOf(lastStable.title,lastStable.body)){
-      if (lastStable.body){
-        const now = Date.now();
-        // ロックを延長してチラつきを抑える
-        lockUntil = Math.max(lockUntil, now + 120);
-        if (tEl) tEl.textContent = `【 ${lastStable.title} 】`;
-        if (bEl) bEl.textContent = lastStable.body;
-      }
-      return;
-    }
-    // 正常な新規描画なら記録してロック
-    commitPaint(tt, bb);
-  });
-  obs.observe(document.body, { childList:true, characterData:true, subtree:true });
-
-  // ---- 初期の安定化（他パッチの出力より少し後に実行） ----
-  function stabilizeInit(){
-    const tt = safeTxt((tEl?.textContent||"").replace(/[【】]/g,""));
-    const bb = safeTxt(bEl?.textContent||"");
-    if (bb && !NG_RE.test(bb) && !/undefined/.test(bb)){
-      lastStable = { title: tt, body: bb, ts: Date.now() };
-      lockUntil = Date.now() + MIN_HOLD;
+      // 最小ロックでフリッカー抑止
+      setTimeout(()=>{ lock=false; }, 200);
     }
   }
-  setTimeout(stabilizeInit, 120);
 
-  // ---- 可視/非可視の切替での暴発を抑止 ----
-  document.addEventListener('visibilitychange', ()=>{
-    if (document.visibilityState === 'hidden'){
-      // 非表示中は現在の安定出力を保持
-      lockUntil = Date.now() + MIN_HOLD;
-    }else{
-      // 表示に戻った直後にロールバック（空で戻るのを防ぐ）
-      if (lastStable.body){
-        if (tEl) tEl.textContent = `【 ${lastStable.title} 】`;
-        if (bEl) bEl.textContent = lastStable.body;
-        lockUntil = Date.now() + MIN_HOLD;
-      }
+  // 3) 初期起動：一度描画したら終了（無限監視しない）
+  (async () => {
+    const had = safeText(bEl?.textContent||"","");
+    if (!had) await paintOne(safeText((tEl?.textContent||"").replace(/[【】]/g,""), ""));
+    await showNext();
+  })();
+
+  // 4) NEXT/RELATED があれば次へ（多重バインド防止）
+  ["nextBtn","next","relBtn","relatedBtn"].forEach(id=>{
+    const el = document.getElementById(id);
+    if (el && !el.__v1926_bound){
+      el.__v1926_bound = true;
+      el.addEventListener('click', ()=> showNext());
     }
   });
 })();
-// === end v19.24 =============================================================
+// === end v19.26 SAFE MODE ====================================================
