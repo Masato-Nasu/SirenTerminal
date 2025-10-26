@@ -16,6 +16,18 @@
 
 ## スクリーンショット
 
+### 🔗 実行ページ
+
+> [https://masato-nasu.github.io/SirenTerminal/](https://masato-nasu.github.io/SirenTerminal/)
+
+ブラウザ（Chrome / Edge / Safari 推奨）で開くと、
+オフラインでも動作する PWA 版 Siren Terminal が起動します。
+スマートフォンでは「ホーム画面に追加」でインストール可能です。
+
+---
+
+## スクリー
+
 > 実行画面（白背景・正方形スクリーン中央にタイトル＋要約、下部は GENRE → NEXT（赤）→ MORE → RELATED → OPEN WIKI → CLEAR の順）
 
 ![Siren Terminal Screenshot](assets/screenshot.png)
