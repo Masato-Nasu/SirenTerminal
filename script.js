@@ -1,119 +1,90 @@
-// v20.6: GENRE厳密適用（ジャンル変更でキュー即リセット＋再プリフェッチ）
-(function(){
-const $=s=>document.querySelector(s);
-const titleBox=$("#title"),blurbBox=$("#blurb"),genreSel=$("#genreSel");
-const detailBtn=$("#detailBtn"),relatedBtn=$("#relatedBtn"),openBtn=$("#openBtn"),
-      nextBtn=$("#nextBtn"),backBtn=$("#backBtn"),clearBtn=$("#clearBtn"),
-      maintext=$("#maintext"),altview=$("#altview");
-let current=null;const V='v20_6';
+// ====== DOM取得 ======
+const $ = (sel) => document.querySelector(sel);
+const titleEl   = $('#title');
+const blurbEl   = $('#blurb');
+const altViewEl = $('#altview');
 
-if(window.__siren_inited__) return; window.__siren_inited__=true;
+const genreSel  = $('#genreSel');
+const nextBtn   = $('#nextBtn');
+const moreBtn   = $('#detailBtn');
+const relatedBtn= $('#relatedBtn');
+const openBtn   = $('#openBtn');
+const clearBtn  = $('#clearBtn');
+const backBtn   = $('#backBtn');
 
-// keys
-const SEEN_TITLES='seen_titles_'+V, SEEN_BLURBS='seen_blurbs_'+V, DAY_KEY='seen_day_'+V;
-const CURSOR_KEY='cat_cursor_'+V, RECENT_TITLES='recent_titles_'+V;
+// ====== 状態 ======
+let idx = 0;
+const seeds = [
+  { t:'AIの阿頼耶識', b:'心的表象と確率的更新についてメモ' },
+  { t:'ノイズからの形', b:'S字の“なだらかさ”を保つ遷移' },
+  { t:'テルミンUI', b:'ロール/ピッチの連続性を担保' },
+];
 
-// states
-let seenTitles=new Set(loadJ(SEEN_TITLES,[]));
-let seenBlurbs=new Set(loadJ(SEEN_BLURBS,[]));
-let recentTitles=loadJ(RECENT_TITLES,[]);
-let cursorMap=loadJ(CURSOR_KEY,{});
-let queue=[]; let filling=false; let inFlightToken=0;
-
-const GENRE_WHITELIST={
-  "科学":["Category:科学","Category:物理学","Category:化学","Category:生物学","Category:地学","Category:天文学","Category:統計学","Category:気象学","Category:工学","Category:計算機科学","Category:神経科学","Category:環境科学","Category:材料科学","Category:数理科学","Category:認知科学"],
-  "数学":["Category:数学","Category:幾何学","Category:代数学","Category:解析学","Category:確率論","Category:統計学","Category:数理論理学"],
-  "技術":["Category:工学","Category:電気工学","Category:機械工学","Category:情報工学","Category:土木工学","Category:建築学","Category:ソフトウェア"],
-  "哲学":["Category:哲学","Category:倫理学","Category:形而上学","Category:認識論","Category:美学","Category:論理学"],
-  "芸術":["Category:芸術","Category:美術","Category:音楽","Category:映画","Category:写真","Category:デザイン","Category:建築"],
-  "言語学":["Category:言語学","Category:音声学","Category:意味論","Category:統語論","Category:語用論","Category:形態論"],
-  "心理学":["Category:心理学","Category:認知科学","Category:神経科学"],
-  "歴史":["Category:歴史","Category:日本の歴史","Category:世界の歴史","Category:考古学"],
-  "文学":["Category:文学","Category:小説","Category:詩","Category:批評","Category:比較文学"]
-};
-
-(function dailyReset(){const now=today();const last=localStorage.getItem(DAY_KEY);if(last!==now){saveJ(SEEN_TITLES, loadJ(SEEN_TITLES, []).slice(-5000));saveJ(SEEN_BLURBS, loadJ(SEEN_BLURBS, []).slice(-5000));localStorage.setItem(DAY_KEY, now);}})();
-
-function today(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}
-function loadJ(k,f){try{return JSON.parse(localStorage.getItem(k)||JSON.stringify(f))}catch{return f}}
-function saveJ(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
-function bust(u){return u+(u.includes('?')?'&':'?')+'t='+Date.now()}
-async function jget(u,timeoutMs=5000){const c=new AbortController();const id=setTimeout(()=>c.abort(),timeoutMs);try{const r=await fetch(bust(u),{mode:'cors',headers:{'Accept':'application/json'},cache:'no-store',signal:c.signal});if(!r.ok)throw new Error('HTTP '+r.status);const ct=r.headers.get('content-type')||'';if(!ct.includes('application/json'))throw new Error('Non-JSON');return await r.json()}finally{clearTimeout(id)}}
-function norm(d){const t=d.title||'（無題）';const bl=d.description?`${d.description}`:(d.extract?(d.extract.split('。')[0]+'。'):'（概要なし）');const det=d.extract||'（詳細なし）';const url=(d.content_urls&&d.content_urls.desktop)?d.content_urls.desktop.page:('https://ja.wikipedia.org/wiki/'+encodeURIComponent(t));return {title:t,blurb:bl,detail:det,url}}
-function esc(s){return String(s).replace(/[&<>"']/g,m=>m==='&'?'&amp;':m==='<'?'&lt;':m==='>'?'&gt;':m==='"'?'&quot;':'&#39;')}
-function canonicalBlurb(s){return s.replace(/\s+/g,'').replace(/[「」『』（）()［］\[\]、。・,\.]/g,'').toLowerCase()}
-
-async function catMembers(cat,cont=""){const u='https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle='+encodeURIComponent(cat)+'&cmtype=page&cmnamespace=0&cmlimit=100&origin=*'+(cont?('&cmcontinue='+encodeURIComponent(cont)):'');
-  const d=await jget(u);const m=(d.query&&d.query.categorymembers)||[];const next=(d.continue&&d.continue.cmcontinue)||"";return {titles:m.map(x=>x.title),cont:next};}
-async function sumByTitle(t){const d=await jget('https://ja.wikipedia.org/api/rest_v1/page/summary/'+encodeURIComponent(t));return norm(d)}
-async function relatedOf(title){try{const d=await jget('https://ja.wikipedia.org/api/rest_v1/page/related/'+encodeURIComponent(title));return (d.pages||[]).map(norm)}catch{return []}}
-
-// prefetch queue
-async function fillQueue(genre){
-  if(filling) return; filling=true;
-  try{
-    const target=12; if(queue.length>=target) return;
-    let titles=[];
-    if(genre==='all'){
-      const d=await jget('https://ja.wikipedia.org/w/api.php?action=query&format=json&list=random&rnnamespace=0&rnlimit=80&origin=*');
-      titles=((d.query&&d.query.random)||[]).map(x=>x.title);
-    }else{
-      const roots=GENRE_WHITELIST[genre]||[];
-      for(const root of roots){
-        if(titles.length>=80) break;
-        const cur=(cursorMap[root]||"");
-        const {titles:ts, cont}=await catMembers(root, cur);
-        cursorMap[root]=cont||""; saveJ(CURSOR_KEY, cursorMap);
-        titles.push(...ts);
-      }
-    }
-    titles=titles.filter(t=>!seenTitles.has(t)&&recentTitles.indexOf(t)===-1);
-    let i=0; const out=[]; const limit=4;
-    async function worker(){while(i<titles.length && queue.length+out.length<target){const t=titles[i++];try{const s=await sumByTitle(t);const cb=canonicalBlurb(s.blurb);if(cb.length>=6 && !seenBlurbs.has(cb)) out.push(s);}catch{}}}
-    await Promise.all(Array.from({length:limit}, worker));
-    queue.push(...out);
-  }finally{filling=false;}
+function setMain(t, b) {
+  if (titleEl) titleEl.textContent = t || '（無題）';
+  if (blurbEl) blurbEl.textContent = b || '';
 }
 
-function showMain(){maintext.hidden=false;altview.hidden=true;backBtn.hidden=true}
-function showAlt(h){altview.innerHTML=h;maintext.hidden=true;altview.hidden=false;backBtn.hidden=false}
-function render(s,token){if(token!==inFlightToken)return;titleBox.textContent=`【 ${s.title} 】`;blurbBox.textContent=s.blurb;showMain()}
-function markSeen(s){const cb=canonicalBlurb(s.blurb);seenTitles.add(s.title);saveJ(SEEN_TITLES,Array.from(seenTitles).slice(-100000));seenBlurbs.add(cb);saveJ(SEEN_BLURBS,Array.from(seenBlurbs).slice(-100000));recentTitles=(recentTitles.concat([s.title])).slice(-40);saveJ(RECENT_TITLES,recentTitles)}
+// 現在タイトル取得（WIKI/RELATEDで使用）
+function currentQuery() {
+  const t = (titleEl?.textContent || '').trim();
+  return t || (genreSel?.value || 'トピック');
+}
 
-async function nextConcept(){inFlightToken++;const token=inFlightToken;nextBtn.disabled=true;titleBox.textContent="（読み込み中…）";blurbBox.textContent="";
-  const g=genreSel.value;try{if(queue.length===0)await fillQueue(g);const s=queue.shift();if(!s){titleBox.textContent="（候補が見つかりません）";blurbBox.textContent="ジャンルを変えるか、少し時間をおいて再試行してください。";return;}current=s;markSeen(s);render(s,token);fillQueue(g);}finally{if(token===inFlightToken)nextBtn.disabled=false;}}
+// 初期化（起動中→最初の項目に差し替え）
+function boot() {
+  setMain(seeds[0].t, seeds[0].b);
+  if (altViewEl) altViewEl.hidden = true;
+  if (backBtn) backBtn.hidden = true;
+}
 
-document.addEventListener('DOMContentLoaded', async()=>{
-  nextBtn.addEventListener('click', nextConcept);
-  backBtn.addEventListener('click', showMain);
-  clearBtn.addEventListener('click', ()=>{ if(!altview.hidden) showMain(); });
-  detailBtn.addEventListener('click', ()=>{ if(!current) return; showAlt(`<h3>DETAIL</h3>${esc(current.detail)}\n\n<p><a href="${current.url}" target="_blank" rel="noopener">WIKIを開く</a></p>`); });
-  relatedBtn.addEventListener('click', async ()=>{
-    if(!current) return;
-    showAlt("<h3>RELATED</h3><ul><li>loading…</li></ul>");
-    try{
-      const rel=await relatedOf(current.title);
-      if(!rel.length){ showAlt("<h3>RELATED</h3><ul><li>(no items)</li></ul>"); return; }
-      const items=rel.slice(0,9).map((p,i)=>`<li>[${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${esc(p.title)}</a></li>`).join("");
-      showAlt(`<h3>RELATED</h3><ul>${items}</ul>`);
-    }catch{ showAlt("<h3>RELATED</h3><ul><li>(failed)</li></ul>"); }
-  });
+// ====== ボタン挙動 ======
+// NEXT: ダミーで配列を巡回（実アプリのロジックに置換可）
+nextBtn?.addEventListener('click', () => {
+  idx = (idx + 1) % seeds.length;
+  setMain(seeds[idx].t, seeds[idx].b);
+});
 
-  // ★ ジャンル変更：キュー即リセット＋再プリフェッチ＋即表示
-  genreSel.addEventListener('change', async ()=>{
-    inFlightToken++; // 古い描画を無効化
-    queue.length = 0; // キュークリア
-    nextBtn.disabled = true;
-    titleBox.textContent="（ジャンル切替中…）"; blurbBox.textContent="";
-    await fillQueue(genreSel.value);
-    await nextConcept();
-  });
-
-  await fillQueue(genreSel.value);
-  await nextConcept();
-
-  if(location.protocol.startsWith('http')&&'serviceWorker'in navigator){
-    navigator.serviceWorker.register('./serviceWorker.js').then(r=>{ if(r&&r.update) r.update(); }).catch(()=>{});
+// MORE: 補助表示をトグル
+moreBtn?.addEventListener('click', () => {
+  if (!altViewEl || !backBtn) return;
+  if (altViewEl.hidden) {
+    altViewEl.innerHTML = `<div class="blurb">詳細: 「${currentQuery()}」の補足情報（ダミー）</div>`;
+    altViewEl.hidden = false;
+    backBtn.hidden = false;
+  } else {
+    altViewEl.hidden = true;
+    backBtn.hidden = true;
   }
 });
-})();
+
+// RELATED: 現在タイトル＋ジャンルでWeb検索
+relatedBtn?.addEventListener('click', () => {
+  const q = encodeURIComponent(`${currentQuery()} ${genreSel?.value || ''} 関連`);
+  const url = `https://www.google.com/search?q=${q}`;
+  window.open(url, '_blank', 'noopener');
+});
+
+// OPEN WIKI: 現在タイトルで日本語Wikipedia検索を開く
+openBtn?.addEventListener('click', () => {
+  const q = encodeURIComponent(currentQuery());
+  const url = `https://ja.wikipedia.org/w/index.php?search=${q}`;
+  window.open(url, '_blank', 'noopener');
+});
+
+// CLEAR: 画面を初期状態に
+clearBtn?.addEventListener('click', () => {
+  setMain('起動中…', '読み込み中');
+  if (altViewEl) altViewEl.hidden = true;
+  if (backBtn) backBtn.hidden = true;
+  idx = 0;
+});
+
+// BACK: MORE表示から戻る
+backBtn?.addEventListener('click', () => {
+  if (altViewEl) altViewEl.hidden = true;
+  if (backBtn) backBtn.hidden = true;
+});
+
+// 起動
+document.addEventListener('DOMContentLoaded', boot);
