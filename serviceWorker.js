@@ -1,5 +1,5 @@
-// v3: add 'WIKIを開く'機能のためキャッシュ名更新
-const CACHE_NAME = 'siren-terminal-wiki-v3';
+// v4 cache bump
+const CACHE_NAME = 'siren-terminal-wiki-v4';
 const FILES_TO_CACHE = [
   './index.html',
   './style.css',

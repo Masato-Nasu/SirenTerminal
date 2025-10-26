@@ -1,4 +1,6 @@
-// Siren Terminal – Wikipedia版（ジャンルフィルタ + WIKIを開くボタン/ショートカット）
+// Siren Terminal – Wikipedia版（v4 修正）
+// 注意: Service Worker と fetch の挙動のため、file:// ではなく http(s):// で開いてください。
+// 例: ターミナルで `python3 -m http.server` 実行 → http://localhost:8000/ にアクセス。
 
 const output = document.getElementById('output');
 const detailBtn = document.getElementById('detailBtn');
@@ -13,6 +15,8 @@ let timer = null;
 let current = null;
 const historyBuf = [];
 const categoryCache = {};
+
+function log(...args){ console.log("[SirenTerminal]", ...args); }
 
 function typeWriter(text, speed = 26) {
   return new Promise(resolve => {
@@ -35,7 +39,8 @@ function normalizeSummary(data) {
 
 async function fetchRandomSummary() {
   const url = "https://ja.wikipedia.org/api/rest_v1/page/random/summary";
-  const res = await fetch(url, { mode: "cors", headers: { "Accept": "application/json" } });
+  log("fetch random:", url);
+  const res = await fetch(url, { mode: "cors", headers: { "Accept": "application/json" }, cache: "no-store" });
   if (!res.ok) throw new Error("Wikipedia fetch failed: " + res.status);
   const data = await res.json();
   return normalizeSummary(data);
@@ -43,7 +48,8 @@ async function fetchRandomSummary() {
 
 async function fetchRelated(title) {
   const url = "https://ja.wikipedia.org/api/rest_v1/page/related/" + encodeURIComponent(title);
-  const res = await fetch(url, { mode: "cors", headers: { "Accept": "application/json" } });
+  log("fetch related:", url);
+  const res = await fetch(url, { mode: "cors", headers: { "Accept": "application/json" }, cache: "no-store" });
   if (!res.ok) throw new Error("Wikipedia related fetch failed: " + res.status);
   const data = await res.json();
   return (data.pages || []).map(p => normalizeSummary(p));
@@ -65,8 +71,10 @@ async function getCategoryMembersForGenre(genre) {
   const cats = GENRE_TO_CATEGORIES[genre] || [];
   let titles = [];
   for (const cat of cats) {
-    const url = `https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle=${encodeURIComponent('Category:' + cat)}&cmtype=page&cmlimit=500&origin=*`;
-    const res = await fetch(url, { mode: "cors" });
+    // 記事 namespace (=0) に限定。origin=* で CORS 許可。
+    const url = `https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle=${encodeURIComponent('Category:' + cat)}&cmtype=page&cmnamespace=0&cmlimit=500&origin=*`;
+    log("fetch category members:", url);
+    const res = await fetch(url, { mode: "cors", cache: "no-store" });
     if (!res.ok) continue;
     const data = await res.json();
     const arr = (data.query && data.query.categorymembers) ? data.query.categorymembers : [];
@@ -74,6 +82,7 @@ async function getCategoryMembersForGenre(genre) {
   }
   titles = Array.from(new Set(titles));
   categoryCache[genre] = titles;
+  log("cached titles for genre", genre, titles.length);
   return titles;
 }
 
@@ -82,7 +91,8 @@ async function fetchFromGenre(genre) {
   if (!list.length) throw new Error("カテゴリに項目が見つかりません: " + genre);
   const pick = list[Math.floor(Math.random() * list.length)];
   const url = "https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(pick);
-  const res = await fetch(url, { mode: "cors", headers: { "Accept": "application/json" } });
+  log("fetch summary by title:", url);
+  const res = await fetch(url, { mode: "cors", headers: { "Accept": "application/json" }, cache: "no-store" });
   if (!res.ok) throw new Error("summary fetch failed: " + res.status);
   const data = await res.json();
   return normalizeSummary(data);
@@ -98,6 +108,7 @@ async function showOne() {
     await typeWriter(`今日の概念：${current.title}\n\n`);
     await typeWriter(`${current.blurb}`);
   } catch (err) {
+    log("showOne error:", err);
     const fallback = historyBuf.length ? historyBuf[Math.floor(Math.random() * historyBuf.length)] : null;
     output.textContent = "";
     await typeWriter("（オンライン取得に失敗しました。履歴から再提示します）\n\n");
@@ -111,11 +122,11 @@ async function showOne() {
   }
 }
 
-// UI
 detailBtn.addEventListener('click', () => {
   if (!current) return;
   output.textContent += `\n\n[詳細]\n${current.detail}\n\n[出典] ${current.url}`;
 });
+
 relatedBtn.addEventListener('click', async () => {
   if (!current) return;
   output.textContent += `\n\n[関連項目] 読み込み中…`;
@@ -123,21 +134,32 @@ relatedBtn.addEventListener('click', async () => {
     const rel = await fetchRelated(current.title);
     if (!rel.length) { output.textContent += `\n- （関連なし）`; return; }
     output.textContent += "\n";
-    rel.slice(0, 5).forEach(p => { output.textContent += `- ${p.title}\n`; });
-  } catch {
+    // クリックで開けるように、番号付きにして案内
+    rel.slice(0, 5).forEach((p, i) => {
+      output.textContent += `- [${i+1}] ${p.title}  ${p.url}\n`;
+    });
+    output.textContent += `\n（リンクをクリックするとWikipediaが開きます）`;
+  } catch (e) {
     output.textContent += `\n- （関連取得に失敗しました）`;
+    log("related error:", e);
   }
 });
+
 openBtn.addEventListener('click', () => {
-  if (current?.url) window.open(current.url, '_blank', 'noopener');
+  const url = current?.url || (current?.title ? "https://ja.wikipedia.org/wiki/" + encodeURIComponent(current.title) : null);
+  if (url) {
+    window.open(url, '_blank', 'noopener');
+  } else {
+    alert("まだ開ける項目がありません。もう一度お試しください。");
+  }
 });
+
 nextBtn.addEventListener('click', () => { if (timer) { clearInterval(timer); timer = null; } showOne().then(setupIntervalFromSelect); });
 clearBtn.addEventListener('click', () => { output.textContent = ""; });
 genreSel.addEventListener('change', () => { if (timer) { clearInterval(timer); timer = null; } showOne().then(setupIntervalFromSelect); });
 
-// keyboard shortcuts: o=open wiki, n=next
 window.addEventListener('keydown', (e) => {
-  if (e.key.toLowerCase() === 'o') { if (current?.url) window.open(current.url, '_blank', 'noopener'); }
+  if (e.key.toLowerCase() === 'o') { const url = current?.url || (current?.title ? "https://ja.wikipedia.org/wiki/" + encodeURIComponent(current.title) : null); if (url) window.open(url, '_blank', 'noopener'); }
   if (e.key.toLowerCase() === 'n') { if (timer) { clearInterval(timer); timer = null; } showOne().then(setupIntervalFromSelect); }
 });
 
@@ -147,10 +169,11 @@ function setupIntervalFromSelect() {
   if (val > 0) timer = setInterval(showOne, val);
 }
 
-// 初期表示
 showOne().then(setupIntervalFromSelect);
 
-// PWA: SW登録 & 更新
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('./serviceWorker.js').then(reg => { if (reg && reg.update) reg.update(); }).catch(()=>{});
+// PWA: SW登録 & 更新（localhost/HTTPSのみ）
+if (location.protocol.startsWith('http') && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./serviceWorker.js').then(reg => { if (reg && reg.update) reg.update(); }).catch(err => log("SW register error:", err));
+} else {
+  console.warn("Service Workerは https:// または http://localhost でのみ有効です。");
 }
