@@ -11,3 +11,4 @@ label.interval, label.genre { display: inline-flex; align-items: center; gap: 8p
 #footer { font-size: 12px; opacity: .85; }
 a { color: #66ff66; }
 .banner { background: #220; border: 1px solid #0f0; padding: 8px 10px; }
+.badge { display:inline-block; margin-left:6px; padding:2px 6px; border:1px solid #00ff00; }

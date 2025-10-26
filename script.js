@@ -1,5 +1,5 @@
-// Siren Terminal – Wikipedia版（v5）
-// 修正: 関連をクリック可能なリンクで描画 / 関連取得のログ強化 / file:// 警告 / SW v5
+// v6: 強制更新向けのSW設定を徹底（skipWaiting/clients.claim・cache名v6）
+// クリック可能な関連リンク、ジャンルフィルタ、WIKIオープンなどはv5準拠。
 
 const output = document.getElementById('output');
 const detailBtn = document.getElementById('detailBtn');
@@ -16,16 +16,12 @@ let current = null;
 const historyBuf = [];
 const categoryCache = {};
 
-if (location.protocol === 'file:') {
-  banner.hidden = false;
-}
+if (location.protocol === 'file:') banner.hidden = false;
 
 function log(...args){ console.log("[SirenTerminal]", ...args); }
 
-// Append plain text
-function appendText(text){ output.textContent += text; }
-// Append safe HTML (titles escaped)
 function escapeHtml(s){ return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function appendText(text){ output.textContent += text; }
 function appendHTML(html){ output.innerHTML += html; }
 
 async function typeWriter(text, speed = 26) {
@@ -141,7 +137,6 @@ relatedBtn.addEventListener('click', async () => {
   appendText(`\n\n[関連項目] 読み込み中…`);
   try {
     const rel = await fetchRelated(current.title);
-    // 置き換え：読み込み中を消し、リンクをHTMLで挿入
     output.textContent = output.textContent.replace(/\[関連項目\] 読み込み中…$/, "[関連項目]");
     if (!rel.length) { appendText(`\n- （関連なし）`); return; }
     let html = "";
@@ -182,9 +177,13 @@ function setupIntervalFromSelect() {
 showOne().then(setupIntervalFromSelect);
 
 // PWA: SW登録 & 更新（localhost/HTTPSのみ）
-if (location.protocol.startswith ? location.protocol.startswith('http') : location.protocol.indexOf('http') === 0) {
+if (location.protocol.startsWith('http')) {
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('./serviceWorker.js').then(reg => { if (reg && reg.update) reg.update(); }).catch(err => log("SW register error:", err));
+    navigator.serviceWorker.register('./serviceWorker.js').then(reg => { 
+      if (reg && reg.update) reg.update();
+      // すぐ更新を適用
+      if (reg.waiting) { reg.waiting.postMessage({ type: 'SKIP_WAITING' }); }
+    }).catch(err => log("SW register error:", err));
   }
 } else {
   console.warn("Service Workerは https:// または http://localhost でのみ有効です。");
