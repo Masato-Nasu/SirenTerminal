@@ -40,10 +40,12 @@
       </label>
       <button class="btn" id="openBtn" title="Wikipediaで開く">WIKIを開く</button>
       <button class="btn" id="nextBtn" title="今すぐ次へ">今すぐ次へ</button>
-      <button class="btn" id="clearBtn" title="クリア">クリア</button>
-      <button class="btn" id="diagBtn" title="診断情報を表示">診断</button>
-      <div class="btn badge" aria-hidden="true">v8</div>
+      <button class="btn" id="clearBtn" title="表示をクリア">クリア</button>
+      <button class="btn" id="diagBtn" title="診断情報">診断</button>
+      <button class="btn" id="logBtn" title="ログの表示/非表示">ログ</button>
+      <div class="btn badge" aria-hidden="true">v10</div>
     </div>
+    <details id="logPanel"><summary>ネットワークログ</summary><pre id="log"></pre></details>
     <div id="footer">
       出典: <a href="https://ja.wikipedia.org/" target="_blank" rel="noopener">Wikipedia</a>（CC BY-SA / GFDL）
       ／ ショートカット: <code>o</code> でWIKIを開く, <code>n</code> で次へ

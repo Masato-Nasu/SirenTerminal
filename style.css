@@ -6,6 +6,8 @@ body { margin: 0; background: #000; color: #00ff00; font-family: "Courier New", 
 #output { white-space: pre-wrap; line-height: 1.55; flex: 1; overflow: auto; }
 a { color: #66ff66; }
 .banner { background: #220; border: 1px solid #0f0; padding: 8px 10px; }
+#logPanel { border: 1px solid #0f0; padding: 8px; }
+#log { white-space: pre-wrap; margin: 0; }
 
 /* 同じ大きさの四角いコントロール */
 .controls-grid {
