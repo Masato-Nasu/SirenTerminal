@@ -1,5 +1,5 @@
-// v18.5 cache bump
-const CACHE_NAME = 'siren-terminal-centerui-v18-5';
+// v18.7 cache bump
+const CACHE_NAME = 'siren-terminal-v18-7';
 const FILES_TO_CACHE = [
   './index.html',
   './style.css',

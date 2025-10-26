@@ -3,14 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Siren Terminal – Center Panel UI</title>
+  <title>Siren Terminal</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <main class="wrap">
-    <canvas id="viz" width="640" height="640" aria-hidden="true"></canvas>
-    <div id="titlebar" class="bar" role="status" aria-live="polite">LOADING…</div>
+    <div id="title" role="status" aria-live="polite">起動中…</div>
 
     <div class="stack">
       <label class="btn select-wrap">
@@ -33,7 +32,6 @@
       <button class="btn" id="relatedBtn">RELATED</button>
       <button class="btn" id="openBtn">OPEN WIKI</button>
       <button class="btn" id="nextBtn">NEXT</button>
-      <button class="btn warn" id="banBtn">BAN THIS</button>
       <button class="btn" id="clearBtn">CLEAR</button>
     </div>
 
