@@ -237,219 +237,103 @@ function escapeHtml(str){
 
 
 
-// === v19.22: 科学ジャンル限定 + 24連ユニーク + 無限補充（UI非変更） ==============
+// === v19.23: シングルトン初期化 + デバウンス＆ロック + 多重監視ガード =========
 (function(){
+  // 二重起動防止（script.jsが複数回読み込まれても1回だけ有効化）
+  if (window.__SIREN_V1923_LOADED__) return;
+  window.__SIREN_V1923_LOADED__ = true;
+
+  const NG_RE = /候補が[\s　]*(?:出ません|見つかりません)/;
   const tEl = document.getElementById("titleBox") || document.getElementById("title") || document.querySelector(".title");
   const bEl = document.getElementById("blurbBox") || document.getElementById("blurb") || document.querySelector(".blurb") || document.body;
 
-  // --- 設定 ---
-  const Q_KEY='siren_v19_22_q';
-  const SEEN_KEY='siren_v19_22_seen';
-  const CMC_KEY='siren_v19_22_cm'; // カテゴリごとのcmcontinueトークン
-  const FIRSTN_KEY='siren_v19_22_firstN_count';
-  const FIRSTN_TITLES_KEY='siren_v19_22_firstN_titles';
-  const FIRST_N = 24;       // 最初は絶対ユニークで24件出す
-  const MAX_QUEUE = 80;     // プール
-  const MIN_REFILL = 20;    // 下回ったら補充
-  const SEEN_LIMIT = 3000;  // 既読上限（科学カテゴリは広いので多め）
+  // 既存の供給関数がある前提（v19.2x 系）。なければ簡易フォールバックを使う。
+  const serveBase = window.__sirenServeV192x || window.__sirenServe || null;
 
-  // 科学系カテゴリ（日本語版）
-  const SCI_CATS = [
-    "Category:自然科学",
-    "Category:物理学",
-    "Category:化学",
-    "Category:生物学",
-    "Category:地球科学",
-    "Category:天文学",
-    "Category:工学",
-    "Category:生命科学",
-    "Category:神経科学",
-    "Category:科学史"
-  ];
+  // ====== 低侵襲の供給ラッパ ======
+  let inFlight = false;     // 同時実行ロック
+  let queued = false;       // デバウンス用フラグ
+  let lastPaintKey = "";    // 同一描画の抑制（ちらつき回避）
+  const SAFE_TXT = (v)=> (typeof v==="string" && v.trim()) ? v.trim() : "";
+  const NEED_FIX = ()=> {
+    const txt = String(document.body.innerText || "");
+    const content = SAFE_TXT(bEl?.textContent || "");
+    return !content || /undefined/.test(txt) || NG_RE.test(txt);
+  };
 
-  // --- 基本ユーティリティ ---
-  const safe=(v,f="") => (typeof v==="string" && v.trim()) ? v : f;
-  const jget=(k,d)=>{ try{ return JSON.parse(localStorage.getItem(k) ?? "null") ?? d; }catch{return d;} };
-  const jset=(k,v)=> localStorage.setItem(k, JSON.stringify(v));
-  const nowTitle=()=> (tEl?.textContent||"").replace(/[【】]/g,"").trim();
-
-  function loadQ(){ return jget(Q_KEY,[]); }
-  function saveQ(q){ jset(Q_KEY, q.slice(0, MAX_QUEUE)); }
-
-  function pushSeen(title){
-    if (!title) return;
-    const set = new Set(jget(SEEN_KEY,[]));
-    set.add(title);
-    let arr = Array.from(set);
-    if (arr.length > SEEN_LIMIT) arr = arr.slice(-Math.floor(SEEN_LIMIT*0.6));
-    jset(SEEN_KEY, arr);
-  }
-  function wasSeen(title){ return jget(SEEN_KEY,[]).includes(title); }
-
-  function firstNCount(){ return jget(FIRSTN_KEY, 0); }
-  function setFirstNCount(n){ jset(FIRSTN_KEY, n); }
-  function firstNTitles(){ return new Set(jget(FIRSTN_TITLES_KEY, [])); }
-  function pushFirstNTitle(title){
-    const s = firstNTitles(); s.add(title);
-    jset(FIRSTN_TITLES_KEY, Array.from(s));
+  async function simpleFallback(){
+    // 簡易フォールバック：タイトルを維持しつつ summary を取り直し（Action API、CORS安全）
+    const base = SAFE_TXT((tEl?.textContent||"").replace(/[【】]/g,"")) || "月";
+    const u = 'https://ja.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&titles='
+            + encodeURIComponent(base) + '&format=json&origin=*';
+    try{
+      const r = await fetch(u, {cache:'no-store'});
+      const j = await r.json();
+      const pages = j?.query?.pages || {};
+      const k = Object.keys(pages)[0];
+      const p = pages[k];
+      const title = SAFE_TXT(p?.title || base);
+      const extract = SAFE_TXT(p?.extract || "");
+      if (tEl) tEl.textContent = `【 ${title} 】`;
+      if (bEl) bEl.textContent = extract;
+      lastPaintKey = title + "::" + extract.slice(0,32);
+    }catch(_){ /* no-op */ }
   }
 
-  function dequeue(){
-    const q = loadQ();
-    const it = q.shift();
-    saveQ(q);
-    return it || null;
-  }
-  function enqueue(items, requireUniqueForFirstN=true){
-    const q = loadQ();
-    const seenSet = new Set(jget(SEEN_KEY,[]));
-    const firstNset = firstNTitles();
-    const needUnique = firstNCount() < FIRST_N && requireUniqueForFirstN;
-    for (const it of items){
-      const title = it?.title; if (!title) continue;
-      // まず既読で弾く
-      if (seenSet.has(title)) continue;
-      // 最初の24件は "これまで出した24件タイトルの重複" も弾く
-      if (needUnique && firstNset.has(title)) continue;
-      if (q.find(x=>x.title===title)) continue;
-      q.push({ title, extract: safe(it.extract,"") });
-      if (q.length >= MAX_QUEUE) break;
-    }
-    saveQ(q);
-  }
-
-  // --- MediaWiki Action API（origin=*）---
-  async function fetchJSON(u, {retries=3, timeout=8000} = {}){
-    for (let a=0; a<=retries; a++){
-      const ctrl = new AbortController();
-      const timer = setTimeout(()=>ctrl.abort(), timeout);
-      try{
-        const r = await fetch(u + (u.includes('?')?'&':'?') + '_=' + Date.now(), { cache:'no-store', signal: ctrl.signal });
-        clearTimeout(timer);
-        if (!r.ok) throw new Error('HTTP '+r.status);
-        const ct = (r.headers.get('content-type')||'').toLowerCase();
-        if (!ct.includes('application/json')) throw new Error('CT');
-        return await r.json();
-      }catch(e){
-        clearTimeout(timer);
-        await new Promise(rs=>setTimeout(rs, 280*(a+1)));
+  async function serveWrapper(force=false){
+    if (inFlight){ queued = true; return; }
+    inFlight = true;
+    try{
+      if (serveBase){
+        await serveBase(force);
       }
-    }
-    return null;
-  }
-  const enc = (t)=>encodeURIComponent(t).replace(/%20/g,'_');
-
-  async function apiCategoryMembers(catTitle, limit=30){
-    // cmcontinue はローテーション管理
-    const cmMap = jget(CMC_KEY, {});
-    const token = cmMap[catTitle] || "";
-    const u = `https://ja.wikipedia.org/w/api.php?action=query&list=categorymembers&cmtitle=${enc(catTitle)}&cmtype=page&cmlimit=${limit}`
-              + (token?`&cmcontinue=${encodeURIComponent(token)}`:"")
-              + `&format=json&origin=*`;
-    const j = await fetchJSON(u);
-    if (!j?.query?.categorymembers) return { items:[], next:null };
-    const next = j?.continue?.cmcontinue || null;
-    cmMap[catTitle] = next || ""; jset(CMC_KEY, cmMap);
-    const titles = j.query.categorymembers.map(x=>x.title).filter(Boolean);
-    // 要約（extracts）をまとめて取得（最大20ずつ）
-    const items = [];
-    for (let i=0; i<titles.length; i+=20){
-      const batch = titles.slice(i, i+20);
-      const titlesParam = batch.map(enc).join('|');
-      const u2 = `https://ja.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&format=json&origin=*&titles=${titlesParam}`;
-      const j2 = await fetchJSON(u2);
-      const pages = j2?.query?.pages || {};
-      for (const k of Object.keys(pages)){
-        const p = pages[k];
-        if (!p?.title) continue;
-        items.push({ title: p.title, extract: safe(p.extract,"") });
+      // 出力検査（毎回同じテキスト連発やNG文言を消し込む）
+      const title = SAFE_TXT((tEl?.textContent||"").replace(/[【】]/g,""));
+      const body  = SAFE_TXT(bEl?.textContent || "");
+      const key = title + "::" + body.slice(0,32);
+      if (!body || NG_RE.test(body) || key === lastPaintKey){
+        await simpleFallback();
+      }else{
+        lastPaintKey = key;
       }
-    }
-    return { items, next };
-  }
-
-  async function refillScience(){
-    // カテゴリを巡回して順次補充（cmcontinueで深く潜る）
-    for (const cat of SCI_CATS){
-      const { items } = await apiCategoryMembers(cat, 30);
-      if (items && items.length){
-        // 最初の24件は重複厳禁フラグを立てる
-        enqueue(items, true);
-        if (loadQ().length >= MIN_REFILL) break;
-      }
-    }
-    // まだ薄いなら二周目
-    if (loadQ().length < MIN_REFILL){
-      for (const cat of SCI_CATS){
-        const { items } = await apiCategoryMembers(cat, 30);
-        if (items && items.length){
-          enqueue(items, true);
-          if (loadQ().length >= MIN_REFILL) break;
-        }
+    }finally{
+      inFlight = false;
+      if (queued){ queued = false; // デバウンス：背後で溜まっていた呼び出しを1回だけ実行
+        setTimeout(()=>serveWrapper(false), 40);
       }
     }
   }
 
-  async function ensureQ(){
-    if (loadQ().length < MIN_REFILL){
-      await refillScience();
-    }
-  }
+  // ====== グローバルに公開（他パッチと整合させる） ======
+  window.__sirenServeV1923 = serveWrapper;
 
-  function paint(it){
-    if (!it) return;
-    // 成功時は余計な固定文は付けない（毎回同じ文字列をやめる）
-    if (tEl) tEl.textContent = `【 ${safe(it.title,'')} 】`;
-    if (bEl) bEl.textContent = safe(it.extract, "");
-    // カウントと既読・24件ユニークの記録
-    const cnt = firstNCount();
-    const title = safe(it.title,'');
-    pushSeen(title);
-    if (cnt < FIRST_N){
-      pushFirstNTitle(title);
-      setFirstNCount(cnt + 1);
-    }
-  }
+  // ====== 多重監視のガード（既に追加済みのMutationObserverが複数あっても抑制） ======
+  // 新しいObserverは1つだけ。イベント発火はデバウンスで間引く。
+  let mo = null;
+  function hookOnce(){
+    // 初期1回
+    setTimeout(()=>serveWrapper(true), 60);
 
-  async function serve(){
-    await ensureQ();
-    // 24件ユニーク保証：必要な間は重複をスキップして取り直す
-    const seenSet = new Set(jget(SEEN_KEY,[]));
-    const firstNset = firstNTitles();
-    let it = null;
-    for (let guard=0; guard<MAX_QUEUE; guard++){
-      const cand = dequeue(); if (!cand) break;
-      const title = safe(cand.title,'');
-      const needUnique = firstNCount() < FIRST_N;
-      if (seenSet.has(title)) continue;
-      if (needUnique && firstNset.has(title)) continue;
-      it = cand; break;
-    }
-    if (!it){
-      // キューが尽きた/重複しかない → 再補充してもう一度
-      await refillScience();
-      for (let guard=0; guard<MAX_QUEUE; guard++){
-        const cand = dequeue(); if (!cand) break;
-        const title = safe(cand.title,'');
-        const needUnique = firstNCount() < FIRST_N;
-        if (seenSet.has(title)) continue;
-        if (needUnique && firstNset.has(title)) continue;
-        it = cand; break;
-      }
-    }
-    if (it) paint(it);
-  }
-
-  function hook(){
-    // 初期表示
-    setTimeout(serve, 60);
-    // NEXT/RELATED 後
+    // ボタンイベント：複数回バインドされても serveWrapper 側でデバウンス済み
     ["nextBtn","next","relBtn","relatedBtn"].forEach(id=>{
       const el = document.getElementById(id);
-      if (el) el.addEventListener('click', ()=> setTimeout(serve, 40));
+      if (el && !el.__siren_v1923_bound){
+        el.__siren_v1923_bound = true;
+        el.addEventListener('click', ()=> setTimeout(()=>serveWrapper(false), 30));
+      }
     });
+
+    // MutationObserver（既に他の版が動いていても、新しいのは1つだけ）
+    if (!mo){
+      mo = new MutationObserver(()=> setTimeout(()=>serveWrapper(false), 20));
+      mo.observe(document.body, {childList:true,characterData:true,subtree:true});
+    }
   }
-  if (document.readyState==="loading") document.addEventListener("DOMContentLoaded", hook, {once:true});
-  else hook();
+
+  if (document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", hookOnce, {once:true});
+  }else{
+    hookOnce();
+  }
 })();
-// === end v19.22 =============================================================
+// === end v19.23 =============================================================
