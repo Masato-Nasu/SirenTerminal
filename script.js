@@ -237,141 +237,65 @@ function escapeHtml(str){
 
 
 
-// === v19.10 anti-exhaustion patch (UI不変更) ===============================
+// === v19.11 watchdog (UI非変更・停止禁止) =====================
 (function(){
-  const titleEl = document.getElementById("titleBox") || document.getElementById("title") || document.querySelector(".title");
-  const blurbEl = document.getElementById("blurbBox") || document.getElementById("blurb") || document.querySelector(".blurb");
-  const relBtn  = document.getElementById("relBtn") || document.getElementById("relatedBtn");
-  const nextBtn = document.getElementById("nextBtn") || document.getElementById("next");
-
+  const T = document.getElementById("titleBox") || document.getElementById("title") || document.querySelector(".title");
+  const B = document.getElementById("blurbBox") || document.getElementById("blurb") || document.querySelector(".blurb");
+  const REL = document.getElementById("relBtn") || document.getElementById("relatedBtn");
+  const NXT = document.getElementById("nextBtn") || document.getElementById("next");
   const NG = "候補が見つかりません";
-  const COUNT_KEY = "siren_v19_10_count";
-  const SEEN_KEY  = "siren_v19_10_seen";
-  const HISTORY_KEY = "siren_v19_10_hist";
-  const MAX_HISTORY = 6;   // 直近重複チェック用
-  const SOFT_SEEN_LIMIT = 180;
-  const HARD_RESET_EVERY = 21; // 21回ごとに既読を半分に
+
+  async function fetchJSONsafe(url){
+    try{
+      const r = await fetch(url + (url.includes('?')?'&':'?') + '_=' + Date.now(), { headers:{'Accept':'application/json'}, cache:'no-store' });
+      const ct = (r.headers.get('content-type')||'').toLowerCase();
+      if(!r.ok || !ct.includes('application/json')) throw new Error('bad');
+      return await r.json();
+    }catch{ return null; }
+  }
+  async function forceOnline(){
+    const d = await fetchJSONsafe('https://ja.wikipedia.org/api/rest_v1/page/random/summary?redirect=true');
+    if(!d) return null;
+    return { title: d.title, blurb: d.extract || "", url: d?.content_urls?.desktop?.page || "" };
+  }
   const LOCAL = [
     { title:"月", blurb:"地球の唯一の自然衛星。", url:"https://ja.wikipedia.org/wiki/%E6%9C%88" },
     { title:"テレミン", blurb:"触れずに演奏する電子楽器。", url:"https://ja.wikipedia.org/wiki/%E3%83%86%E3%83%AC%E3%83%9F%E3%83%B3" },
     { title:"反応拡散系", blurb:"模様形成を記述する数理モデル。", url:"https://ja.wikipedia.org/wiki/%E5%8F%8D%E5%BF%9C%E6%8B%A1%E6%95%A3%E6%96%B9%E7%A8%8B%E5%BC%8F" },
     { title:"色彩理論", blurb:"色の見えと調和の学理。", url:"https://ja.wikipedia.org/wiki/%E8%89%B2%E5%BD%A9%E5%AD%A6" }
   ];
-
-  function jget(k,d){ try{ return JSON.parse(localStorage.getItem(k) ?? "null") ?? d; }catch{return d;} }
-  function jset(k,v){ localStorage.setItem(k, JSON.stringify(v)); }
-
-  function pushSeen(title){
-    if (!title) return;
-    const seen = jget(SEEN_KEY, []);
-    seen.push(title);
-    // 緩やかに上限
-    if (seen.length > SOFT_SEEN_LIMIT){
-      jset(SEEN_KEY, seen.slice(-Math.floor(SOFT_SEEN_LIMIT*0.6)));
-    }else{
-      jset(SEEN_KEY, seen);
-    }
+  function pickLocal(){
+    return LOCAL[(Math.random()*LOCAL.length)|0];
   }
-  function wasSeen(title){
-    const seen = jget(SEEN_KEY, []);
-    return seen.includes(title);
-  }
-  function pushHist(title){
-    const h = jget(HISTORY_KEY, []);
-    h.push(title);
-    jset(HISTORY_KEY, h.slice(-MAX_HISTORY));
-  }
-  function lastRepeated(title){
-    const h = jget(HISTORY_KEY, []);
-    let c=0;
-    for (let i=h.length-1; i>=0; i--){
-      if (h[i]===title) c++; else break;
-    }
-    return c>=2; // 同じのが連続で2回以上
+  function paint(it, fb=false){
+    if(!it) return;
+    if(T) T.textContent = `【 ${it.title} 】`;
+    if(B) B.textContent = it.blurb + (fb? "（フォールバック）": "");
   }
 
-  function bumpCounterAndMaybeTrim(){
-    const n = (parseInt(localStorage.getItem(COUNT_KEY)||"0",10) || 0) + 1;
-    localStorage.setItem(COUNT_KEY, String(n));
-    if (n % HARD_RESET_EVERY === 0){
-      const seen = jget(SEEN_KEY, []);
-      if (seen.length > 0) jset(SEEN_KEY, seen.slice(-Math.ceil(seen.length/2))); // 半分に
+  async function ensureContent(){
+    // 最大5回まで：オンライン→ローカルを組み合わせて再試行
+    for(let i=0;i<5;i++){
+      const b = (B?.textContent || "").trim();
+      if (b && !b.includes(NG)) return; // もうOK
+      // 試行
+      const on = await forceOnline();
+      if (on && on.blurb) { paint(on,false); continue; }
+      const loc = pickLocal();
+      paint(loc,true);
     }
   }
 
-  // オンラインから強制取得（最終手段）
-  async function forceRandomOnline(){
-    try{
-      const res = await fetch("https://ja.wikipedia.org/api/rest_v1/page/random/summary?redirect=true", {
-        headers: { "Accept": "application/json" }, cache:"no-store"
-      });
-      const ct = (res.headers.get("content-type")||"").toLowerCase();
-      if (!res.ok || !ct.includes("application/json")) throw new Error("bad");
-      const d = await res.json();
-      return { title: d.title, blurb: d.extract || "", url: d?.content_urls?.desktop?.page || "" };
-    }catch{ return null; }
+  function hook(button){
+    if(!button) return;
+    button.addEventListener('click', ()=>{
+      // オリジナル処理の描画完了を待ってから監視
+      setTimeout(ensureContent, 60);
+    }, {capture:false});
   }
-  function pickLocal(avoid){
-    for (let i=0;i<8;i++){
-      const p = LOCAL[(Math.random()*LOCAL.length)|0];
-      if (p.title !== avoid && !wasSeen(p.title)) return p;
-    }
-    return LOCAL[0];
-  }
-
-  function readUI(){
-    const t = (titleEl?.textContent || "").replace(/[【】]/g,"").trim();
-    const b = (blurbEl?.textContent || "").trim();
-    return {t,b};
-  }
-  function paint(item, fallback=false){
-    if (!item) return;
-    if (titleEl) titleEl.textContent = `【 ${item.title} 】`;
-    if (blurbEl) blurbEl.textContent = item.blurb + (fallback ? "（フォールバック）" : "");
-    pushSeen(item.title);
-    pushHist(item.title);
-  }
-
-  async function guardAfterRun(){
-    const {t,b} = readUI();
-    // NG文言 or 空 or 直近重複なら救済
-    if (!b || (NG && b.includes(NG)) || lastRepeated(t)){
-      // まずオンラインで強制ランダム（失敗ならローカル）
-      const on = await forceRandomOnline();
-      if (on && !wasSeen(on.title)){
-        paint(on, false);
-        return;
-      }
-      const loc = pickLocal(t);
-      paint(loc, true);
-    }else if (t){
-      pushSeen(t);
-      pushHist(t);
-    }
-  }
-
-  // wrap showOne
-  const _showOne = typeof showOne === "function" ? showOne : null;
-  if (_showOne){
-    window.showOne = async function(){
-      bumpCounterAndMaybeTrim();
-      await _showOne();
-      await guardAfterRun();
-    };
-  }
-  // wrap RELATED button (onClick/handlerは状況により異なるため、クリック後にガードだけ発火)
-  if (relBtn){
-    relBtn.addEventListener("click", ()=>{
-      bumpCounterAndMaybeTrim();
-      setTimeout(()=>{ guardAfterRun(); }, 40);
-    });
-  }
-  // NEXTボタンが別実装でもガード発火
-  if (nextBtn){
-    nextBtn.addEventListener("click", ()=>{
-      bumpCounterAndMaybeTrim();
-      setTimeout(()=>{ guardAfterRun(); }, 40);
-    });
-  }
+  hook(NXT);
+  hook(REL);
+  // 初期表示でも空なら補正
+  setTimeout(ensureContent, 150);
 })();
-// === end v19.10 patch =======================================================
+// === end v19.11 watchdog =====================================
