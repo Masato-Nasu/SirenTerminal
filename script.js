@@ -237,11 +237,39 @@ function escapeHtml(str){
 
 
 
-// === v19.12 DOM-guard watchdog (UI非変更・強制代替) =========================
+// === v19.14 strict-related guard (UI不変更・無関係ネタ禁止) ==================
 (function(){
-  const NG_TEXT = "候補が見つかりません";
+  const NG = "候補が見つかりません";
+  const TITLE_KEY = "siren_v19_14_last_title";
+  const RECENT_KEY = "siren_v19_14_recent";
+  const RECENT_WIN = 12; // 直近の重複回避用
   const titleEl = document.getElementById("titleBox") || document.getElementById("title") || document.querySelector(".title");
   const blurbEl = document.getElementById("blurbBox") || document.getElementById("blurb") || document.querySelector(".blurb");
+
+  function jget(k,d){ try{ return JSON.parse(localStorage.getItem(k) ?? "null") ?? d; }catch{return d;} }
+  function jset(k,v){ localStorage.setItem(k, JSON.stringify(v)); }
+
+  function currentTitle(){
+    const t1 = (titleEl?.textContent || "").replace(/[【】]/g,"").trim();
+    const t2 = jget(TITLE_KEY, "");
+    return t1 || t2 || "";
+  }
+  function rememberTitle(t){
+    if (!t) return;
+    jset(TITLE_KEY, t);
+    const hist = jget(RECENT_KEY, []);
+    hist.push(t);
+    jset(RECENT_KEY, hist.slice(-RECENT_WIN));
+  }
+  function isRecent(t){
+    return jget(RECENT_KEY, []).includes(t);
+  }
+  function paint(item){
+    if (!item) return;
+    if (titleEl) titleEl.textContent = `【 ${item.title} 】`;
+    if (blurbEl) blurbEl.textContent = (item.extract || item.blurb || item.detail || "");
+    rememberTitle(item.title);
+  }
 
   async function fetchJSONsafe(url){
     try{
@@ -251,57 +279,55 @@ function escapeHtml(str){
       return await r.json();
     }catch{ return null; }
   }
-  async function forceOnline(){
-    const d = await fetchJSONsafe('https://ja.wikipedia.org/api/rest_v1/page/random/summary?redirect=true');
-    if(!d) return null;
-    return { title: d.title, blurb: d.extract || "", url: d?.content_urls?.desktop?.page || "" };
-  }
-  const LOCAL = [
-    { title:"月", blurb:"地球の唯一の自然衛星。", url:"https://ja.wikipedia.org/wiki/%E6%9C%88" },
-    { title:"テレミン", blurb:"触れずに演奏する電子楽器。", url:"https://ja.wikipedia.org/wiki/%E3%83%86%E3%83%AC%E3%83%9F%E3%83%B3" },
-    { title:"反応拡散系", blurb:"模様形成を記述する数理モデル。", url:"https://ja.wikipedia.org/wiki/%E5%8F%8D%E5%BF%9C%E6%8B%A1%E6%95%A3%E6%96%B9%E7%A8%8B%E5%BC%8F" },
-    { title:"色彩理論", blurb:"色の見えと調和の学理。", url:"https://ja.wikipedia.org/wiki/%E8%89%B2%E5%BD%A9%E5%AD%A6" }
-  ];
-  function pickLocal(){ return LOCAL[(Math.random()*LOCAL.length)|0]; }
-  function paint(it, fb=false){
-    if(!it) return;
-    if(titleEl) titleEl.textContent = `【 ${it.title} 】`;
-    if(blurbEl) blurbEl.textContent = it.blurb + (fb? "（フォールバック）": "");
-  }
 
-  async function replaceIfNg(){
-    const b = ((blurbEl && blurbEl.textContent) || document.body.innerText || "").trim();
-    if (!b || b.includes(NG_TEXT)){
-      // 1) try online
-      const on = await forceOnline();
-      if (on && on.blurb){ paint(on,false); return true; }
-      // 2) fallback
-      paint(pickLocal(), true);
+  async function showRelatedOf(title){
+    if (!title) return false;
+    const q = encodeURIComponent(title);
+    // related first
+    const rel = await fetchJSONsafe(`https://ja.wikipedia.org/api/rest_v1/page/related/${q}`);
+    const pages = (rel && rel.pages) ? rel.pages : [];
+    const picks = pages.filter(p => p?.title && !isRecent(p.title));
+    const p = (picks[0] || pages[0]);
+    if (p){
+      paint({ title:p.title, extract:p.extract || "" });
+      return true;
+    }
+    // fallback: re-show summary of the SAME title (not random)
+    const sum = await fetchJSONsafe(`https://ja.wikipedia.org/api/rest_v1/page/summary/${q}`);
+    if (sum && (sum.extract || "").trim()){
+      paint({ title: sum.title || title, extract: sum.extract });
       return true;
     }
     return false;
   }
 
-  // 初期チェック
-  setTimeout(replaceIfNg, 120);
-
-  // DOM監視：どこかが "候補が見つからない" を描いた瞬間に差し替え
-  const obs = new MutationObserver(async (mut)=>{
-    for (const m of mut){
-      if (m.type === "childList" || m.type === "characterData"){
-        const txt = (blurbEl?.textContent || document.body.innerText || "");
-        if (!txt || txt.includes(NG_TEXT)){
-          await replaceIfNg();
-          break;
-        }
-      }
+  async function guard(){
+    const txt = (blurbEl?.textContent || "").trim();
+    if (txt && !txt.includes(NG)) {
+      const t = (titleEl?.textContent || "").replace(/[【】]/g,"").trim();
+      if (t) rememberTitle(t);
+      return;
     }
-  });
-  obs.observe(document.body, { childList:true, characterData:true, subtree:true });
+    // NG または空 → "関連のみ"で補正
+    const base = currentTitle();
+    await showRelatedOf(base);
+  }
 
-  // NEXT / RELATED の後処理としても保険
-  const relBtn  = document.getElementById("relBtn") || document.getElementById("relatedBtn");
-  const nextBtn = document.getElementById("nextBtn") || document.getElementById("next");
-  [relBtn, nextBtn].forEach(btn=> btn && btn.addEventListener('click', ()=> setTimeout(replaceIfNg, 80)));
+  function hook(){
+    // 初期/クリック/DOM更新すべてで短い遅延後にガード
+    setTimeout(guard, 100);
+    ["nextBtn","next","relBtn","relatedBtn"].forEach(id=>{
+      const el = document.getElementById(id);
+      if (el) el.addEventListener("click", ()=> setTimeout(guard, 60));
+    });
+    const mo = new MutationObserver(()=> setTimeout(guard, 10));
+    mo.observe(document.body, { childList:true, characterData:true, subtree:true });
+  }
+
+  if (document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", hook, {once:true});
+  }else{
+    hook();
+  }
 })();
-// === end v19.12 =============================================================
+// === end v19.14 =============================================================
