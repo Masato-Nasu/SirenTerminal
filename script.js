@@ -12,6 +12,22 @@ const altview = document.getElementById('altview');
 const statusEl = document.getElementById('status') || document.querySelector('[data-status]');
 
 // Remove/Hide any genre UI (radios/selects) to reduce confusion & overhead
+
+// --- Aggressive removal of any 'ジャンル' UI (radios, selects, labels, fieldsets) ---
+(function removeGenreEverywhere(){
+  const selectors = [
+    "[id*='genre' i]", "[class*='genre' i]", "input[name*='genre' i]",
+    "fieldset", "section", "div", "label", "ul", "ol", "form"
+  ];
+  for (const sel of selectors){
+    for (const el of Array.from(document.querySelectorAll(sel))){
+      const txt = (el.textContent||"") + " " + (el.getAttribute("aria-label")||"") + " " + (el.getAttribute("name")||"") + " " + (el.id||"") + " " + (el.className||"");
+      if (/ジャンル|genre/i.test(txt)){
+        el.remove();
+      }
+    }
+  }
+})();
 (function removeGenreUI(){
   const byId = ['genreSel','genre','genres','radio-genre'];
   for (const id of byId){ const el = document.getElementById(id); if (el) el.remove(); }
@@ -31,8 +47,8 @@ let profile = loadJSON(PROFILE_KEY, { tags:{}, lastLearn:0 });
 function saveProfile(){ saveJSON(PROFILE_KEY, profile); }
 function bumpTag(t, w=1){ if(!t) return; profile.tags[t]=(profile.tags[t]||0)+w; profile.lastLearn=Date.now(); saveProfile(); }
 function topTags(n=20){ const arr = Object.entries(profile.tags); arr.sort((a,b)=>b[1]-a[1]); return arr.slice(0,n).map(x=>x[0]); }
-function decayProfile(f=0.998){ for (const k in profile.tags) profile.tags[k]*=f; for (const k of Object.keys(profile.tags)) if (profile.tags[k] < 0.12) delete profile.tags[k]; saveProfile(); }
-setInterval(()=>decayProfile(0.9995), 60*1000);
+function decayProfile(f = 0.999){ for (const k in profile.tags) profile.tags[k]*=f; for (const k of Object.keys(profile.tags)) if (profile.tags[k] < 0.12) delete profile.tags[k]; saveProfile(); }
+setInterval(()=>decayProfile(0.9997), 60*1000);
 
 // Salted randomness (always different)
 let pickCounter = 0n;
@@ -43,6 +59,15 @@ function saltedRandSeed(){
 
 // Status
 function setStatus(txt){ if (statusEl) statusEl.textContent = txt; }
+
+function bindOnce(el, type, handler){
+  if (!el) return;
+  const key = "__bound_" + type;
+  if (el[key]) return;
+  el.addEventListener(type, handler);
+  el[key] = true;
+}
+
 
 // ---- helpers ----
 function loadJSON(key, fallback){ try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } }
@@ -152,10 +177,52 @@ async function learnFrom(summary){
     const pages = data?.query?.pages || {};
     const first = Object.values(pages)[0];
     const cats = (first?.categories || []).map(c => String(c.title||'').replace(/^Category:/, ''));
-    for (const c of cats) bumpTag(c, 1.0);
+    for (const c of cats) bumpTag(c, 1.6);
   } catch(e){ /* ignore */ }
-  for (const tok of tokenize(summary)) if (tok.length >= 3) bumpTag(tok, 0.2);
+  for (const tok of tokenize(summary)) if (tok.length >= 3) bumpTag(tok, 0.35);
 }
+
+
+// --- Robust button resolution by id, data-action, or visible text ---
+function resolveButton(primaryId, altIds, textHints){
+  const byId = (id)=> document.getElementById(id);
+  for (const id of [primaryId].concat(altIds||[])){
+    const el = byId(id);
+    if (el) return el;
+  }
+  // data-action
+  for (const hint of textHints||[]){
+    const el = document.querySelector(`[data-action*="${hint}"]`);
+    if (el) return el;
+  }
+  // by text content (button or a)
+  const nodes = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+  function hasText(n){
+    const t = (n.textContent||"").trim();
+    return textHints.some(h => new RegExp(h, 'i').test(t));
+  }
+  for (const n of nodes){ if (hasText(n)) return n; }
+  return null;
+}
+
+// Re-resolve buttons after DOM is ready
+document.addEventListener('DOMContentLoaded', () => {
+  // DETAIL / MORE
+  const detailFallback = resolveButton('detailBtn', ['moreBtn','btnDetail','btnMore'], ['MORE','詳細','DETAIL']);
+  if (detailFallback) detailBtn = detailFallback;
+
+  // RELATED
+  const relatedFallback = resolveButton('relatedBtn', ['btnRelated','relBtn'], ['RELATED','関連']);
+  if (relatedFallback) relatedBtn = relatedFallback;
+
+  // WIKI / OPEN
+  const openFallback = resolveButton('openBtn', ['wikiBtn','btnOpen'], ['WIKI','OPEN','開く']);
+  if (openFallback) openBtn = openFallback;
+
+  // NEXT
+  const nextFallback = resolveButton('nextBtn', ['btnNext'], ['NEXT','次']);
+  if (nextFallback) nextBtn = nextFallback;
+});
 
 // Pool (tiny) & selection
 let pool = [];
@@ -208,7 +275,7 @@ async function pickPlain(){
 }
 
 async function pickPersonal(){
-  const n = Math.min(pool.length, 4);
+  const n = Math.min(pool.length, 6);
   let best = null, bestIdx = -1, bestScore = -1e9;
   for (let i=0;i<n;i++){
     const s = await getSummary(pool[i]);
