@@ -1,5 +1,5 @@
 
-// v21.1: genre mapping + science filter (concepts/laws/phenomena preferred)
+// v21.2: genre-wide relevance filters + category mapping
 const titleBox = document.getElementById('title');
 const blurbBox = document.getElementById('blurb');
 const genreSel = document.getElementById('genreSel');
@@ -13,11 +13,11 @@ const maintext = document.getElementById('maintext');
 const altview = document.getElementById('altview');
 
 let current = null;
-const SEEN_KEY = "siren_seen_titles_v21_1";
+const SEEN_KEY = "siren_seen_titles_v21_2";
 const SEEN_LIMIT = 100000;
 let seenSet = new Set(loadJSON(SEEN_KEY, []));
 
-// ---- helpers (same as v21) ----
+// ---- helpers ----
 function loadJSON(key, fallback){ try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } }
 function saveJSON(key, value){ try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
 function saveSeen(){
@@ -28,10 +28,10 @@ function saveSeen(){
   saveJSON(SEEN_KEY, Array.from(seenSet));
 }
 function sessionSalt() {
-  let s = sessionStorage.getItem('siren_launch_salt_v21_1');
+  let s = sessionStorage.getItem('siren_launch_salt_v21_2');
   if (!s){
     s = String(crypto.getRandomValues(new Uint32Array(2))[0] ^ Date.now());
-    sessionStorage.setItem('siren_launch_salt_v21_1', s);
+    sessionStorage.setItem('siren_launch_salt_v21_2', s);
   }
   return BigInt.asUintN(64, BigInt(parseInt(s,10) >>> 0));
 }
@@ -80,22 +80,45 @@ async function withBackoff(fn, tries=5){
 }
 
 // ---- genre mapping ----
-// Wikipedia のカテゴリに直で当てに行く（日本語カテゴリ名）
 const GENRE_MAP = {
+  "all": [],
   "哲学": ["哲学"],
   "科学": ["自然科学","物理学","化学","生物学","天文学","地球科学","科学的方法","統計学"],
   "数学": ["数学"],
-  "技術": ["工学","情報技術","電気工学","機械工学","材料工学","計算機科学"],
-  "芸術": ["芸術","美術","音楽理論"],
+  "技術": ["工学","情報技術","電気工学","機械工学","材料工学","計算機科学","ソフトウェア工学"],
+  "芸術": ["芸術","美術","音楽","音楽理論","デザイン"],
   "言語学": ["言語学"],
   "心理学": ["心理学","認知科学"],
-  "歴史": ["歴史学"],
-  "文学": ["文学理論","詩","物語論"]
+  "歴史": ["歴史学","世界史","日本史"],
+  "文学": ["文学","詩","物語論","文学理論"]
 };
 
-// 科学用: 人物・作品を弾き概念/理論/現象を優先
-const BIO_OR_WORK_RE = /(人|人物|作家|俳優|政治家|歌手|選手|監督|企業|会社|漫画|小説|アニメ|映画|ゲーム|楽曲|アルバム)/;
+// Positive/Negative patterns by genre
+const NEG_COMMON = /(企業|会社|市|町|村|鉄道|駅|空港|高校|大学|中学校|小学校|自治体|球団|クラブ|漫画|アニメ|映画|ドラマ|楽曲|アルバム|ゲーム|番組|作品|小説|キャラクター|政治家|俳優|女優|歌手|選手|監督)/;
+const POS = {
+  "科学": /(学|理論|定理|法則|効果|反応|方程式|現象|仮説|粒子|素粒子|銀河|惑星|恒星|元素|分子|化合物|酵素|細胞|進化|遺伝|電磁|量子|統計|確率|幾何|解析|熱力学|流体|計算|アルゴリズム|データ構造)/,
+  "数学": /(数学|定理|補題|命題|証明|写像|群|環|体|加群|トポロジー|測度|微積分|幾何|確率|解析|代数|最適化|数論|組合せ)/,
+  "哲学": /(哲学|形而上学|倫理学|認識論|美学|論理|パラドックス|思考実験|概念|命題|規範|価値)/,
+  "技術": /(工学|技術|製造|制御|アルゴリズム|プロトコル|アーキテクチャ|通信|暗号|計算|機械|回路|半導体|材料|プログラミング)/,
+  "言語学": /(言語学|文法|語彙|意味論|統語論|音韻|音声|形態論|語用論|言語獲得|言語変化)/,
+  "心理学": /(心理学|認知|知覚|学習|記憶|注意|動機づけ|感情|発達|人格|臨床|行動|バイアス)/,
+  "歴史": /(歴史|時代|王朝|帝国|戦争|条約|革命|制度|年表|史学|文明|文化|遺跡)/,
+  "文学": /(文学|詩学|修辞|叙事|叙情|物語論|ジャンル|文芸|文学理論)/,
+  "芸術": /(芸術|美術|造形|デザイン|建築|音楽理論|調性|和声|対位法|色彩|構図)/
+};
 
+function titlePassesGenre(genre, summary){
+  if (genre === "all") return true;
+  const d = (summary.description||"");
+  // Some genres allow works (芸術/文学/歴史の一部) — loosen negative filter
+  const allowWorks = (genre === "芸術" || genre === "文学");
+  if (!allowWorks && NEG_COMMON.test(d)) return false;
+  const pos = POS[genre];
+  if (!pos) return true; // no positive pattern — be permissive
+  return pos.test(d) || d === ""; // if description missing, allow
+}
+
+// ---- Wiki category helpers ----
 async function fetchCategoryBatch(catTitle, cmcontinue=""){
   const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle="
     + encodeURIComponent("Category:"+catTitle)
@@ -109,10 +132,11 @@ async function fetchCategoryBatch(catTitle, cmcontinue=""){
 
 async function getTitlesByGenre(genre, seed){
   const cats = GENRE_MAP[genre] || [genre];
+  if (!cats.length) return [];
   let titles = [];
   for (const c of cats){
     let cont = ""; let collected = [];
-    for (let i=0;i<2;i++){ // 各カテゴリ2ページ分で十分厚い
+    for (let i=0;i<2;i++){
       const r = await fetchCategoryBatch(c, cont);
       collected = collected.concat(r.titles);
       cont = r.cont;
@@ -121,12 +145,12 @@ async function getTitlesByGenre(genre, seed){
     titles = titles.concat(collected);
   }
   if (!titles.length) return [];
-  titles = Array.from(new Set(titles)); // 重複削除
+  titles = Array.from(new Set(titles));
   shuffleWithSeed(titles, seed);
   return titles;
 }
 
-async function getRandomTitles(limit=160){
+async function getRandomTitles(limit=200){
   const data = await withBackoff(()=>fetchJSON(
     "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=random&rnnamespace=0&rnlimit="+limit+"&origin=*"
   ));
@@ -150,15 +174,6 @@ async function fetchSummaryByTitle(title){
   }
 }
 
-function isScienceConcept(summary){
-  // 概念・理論・法則・現象などを優先 / 人物・作品・企業などを除外
-  const d = (summary.description||"");
-  if (!d) return true;
-  if (BIO_OR_WORK_RE.test(d)) return false;
-  const good = /(学|理論|定理|法則|効果|反応|方程式|現象|仮説|粒子|素粒子|銀河|惑星|恒星|元素|分子|化合物|酵素|細胞|進化|遺伝|電磁|量子|統計|確率|幾何|解析|熱力学|流体|計算|アルゴリズム|データ構造)/;
-  return good.test(d);
-}
-
 // ---- UI helpers ----
 function showMain(){ maintext.hidden = false; altview.hidden = true; backBtn.hidden = true; }
 function showAlt(html){ altview.innerHTML = html; maintext.hidden = true; altview.hidden = false; backBtn.hidden = false; }
@@ -168,7 +183,7 @@ function renderMain(s){ titleBox.textContent = `【 ${s.title} 】`; blurbBox.te
 let pool = [];
 let fetching = false;
 
-async function refillPool(minNeeded = 140){
+async function refillPool(minNeeded = 160){
   if (fetching) return;
   fetching = true;
   try{
@@ -176,8 +191,8 @@ async function refillPool(minNeeded = 140){
     const seed = await timeSeed();
 
     let titles = [];
-    if (g === "all" || !g){
-      titles = await getRandomTitles(200);
+    if (g === "all" || !GENRE_MAP[g] || GENRE_MAP[g].length === 0){
+      titles = await getRandomTitles(220);
     } else {
       titles = await getTitlesByGenre(g, seed);
     }
@@ -198,29 +213,28 @@ async function refillPool(minNeeded = 140){
 }
 
 async function pickNew(){
-  if (pool.length < 12) await refillPool(160);
+  if (pool.length < 12) await refillPool(200);
   let title = null;
   while (pool.length){
     const t = pool.shift();
     if (!seenSet.has(t)){ title = t; break; }
   }
   if (!title){
-    await refillPool(200);
+    await refillPool(220);
     if (!pool.length) return null;
     title = pool.shift();
   }
   let s = await fetchSummaryByTitle(title);
 
-  // 科学のときはフィルタを適用
+  // apply genre filter universally (except "all")
   const g = (genreSel && genreSel.value) ? genreSel.value : "all";
-  if (g === "科学" && !isScienceConcept(s)){
-    // 3回まで差し替え
-    for (let i=0;i<3;i++){
-      if (!pool.length){ await refillPool(200); }
+  if (g !== "all" && !titlePassesGenre(g, s)){
+    for (let i=0;i<5;i++){
+      if (!pool.length){ await refillPool(220); }
       const t2 = pool.shift();
       if (!t2) break;
       s = await fetchSummaryByTitle(t2);
-      if (isScienceConcept(s)) break;
+      if (titlePassesGenre(g, s)) break;
     }
   }
   return s;
@@ -260,9 +274,10 @@ if (relatedBtn) relatedBtn.addEventListener('click', async () => {
   if (!current) return;
   showAlt("<h3>RELATED</h3><ul><li>loading…</li></ul>");
   try {
-    const rel = await fetchRelatedRobust(current.title);
-    if (!rel.length){ showAlt("<h3>RELATED</h3><ul><li>(no items)</li></ul>"); return; }
-    const items = rel.slice(0,9).map((p,i)=>`<li>[${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${escapeHtml(p.title)}</a></li>`).join("");
+    const d = await withBackoff(()=>fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/related/" + encodeURIComponent(current.title)));
+    const r = (d.pages || []).map(p => normalizeSummary(p));
+    if (!r.length){ showAlt("<h3>RELATED</h3><ul><li>(no items)</li></ul>"); return; }
+    const items = r.slice(0,9).map((p,i)=>`<li>[${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${escapeHtml(p.title)}</a></li>`).join("");
     showAlt(`<h3>RELATED</h3><ul>${items}</ul>`);
   } catch(e){
     showAlt("<h3>RELATED</h3><ul><li>(failed)</li></ul>");
@@ -279,7 +294,7 @@ if (clearBtn) clearBtn.addEventListener('click', () => { if (!altview.hidden) sh
 // 初期表示
 (async () => {
   setTimeout(()=>{}, 0);
-  await refillPool(180);
+  await refillPool(200);
   showOne();
 })();
 
