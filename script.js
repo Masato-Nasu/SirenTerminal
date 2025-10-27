@@ -60,171 +60,7 @@ function saltedRandSeed(){
 // Status
 function setStatus(txt){ if (statusEl) statusEl.textContent = txt; }
 
-function bindOnce(el, type, handler){
-  if (!el) return;
-  const key = "__bound_" + type;
-  if (el[key]) return;
-  el.addEventListener(type, handler);
-  el[key] = true;
-}
-
-
-// ---- helpers ----
-function loadJSON(key, fallback){ try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } }
-function saveJSON(key, value){ try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
-function saveSeen(){
-  if (seenSet.size > SEEN_LIMIT){
-    const keep = Array.from(seenSet).slice(-Math.floor(SEEN_LIMIT*0.8));
-    seenSet = new Set(keep);
-  }
-  saveJSON(SEEN_KEY, Array.from(seenSet));
-}
-function sessionSalt() {
-  let s = sessionStorage.getItem('siren_launch_salt_v21_8_1');
-  if (!s){
-    s = String((crypto.getRandomValues(new Uint32Array(2))[0] ^ Date.now()) >>> 0);
-    sessionStorage.setItem('siren_launch_salt_v21_8_1', s);
-  }
-  return BigInt.asUintN(64, BigInt(parseInt(s,10) >>> 0));
-}
-function mulberry32(a){ return function(){ let t=a+=0x6D2B79F5; t=Math.imul(t^t>>>15,t|1); t^=t+Math.imul(t^t>>>7,t|61); return((t^t>>>14)>>>0)/4294967296; } }
-function shuffleWithSeed(arr, seedBig){
-  const seedLow = Number(seedBig & 0xffffffffn) || 1;
-  const rand = mulberry32(seedLow);
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(rand() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
-}
-function bust(u){ const sep = u.includes('?') ? '&' : '?'; return `${u}${sep}t=${Date.now()}`; }
-async function fetchJSON(url, {timeout=4200} = {}){
-  const ctrl = new AbortController();
-  const t = setTimeout(()=>ctrl.abort(), timeout);
-  try {
-    const res = await fetch(bust(url), { mode: "cors", headers: { "Accept": "application/json" }, cache: "no-store", signal: ctrl.signal });
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const ct = res.headers.get('content-type')||'';
-    if (!ct.includes('application/json')) throw new Error("Non-JSON");
-    return await res.json();
-  } finally { clearTimeout(t); }
-}
-async function withBackoff(fn, tries=3){
-  let lastErr;
-  for (let i=0;i<tries;i++){
-    try { return await fn(); }
-    catch(e){ lastErr=e; await new Promise(r=>setTimeout(r, 200*(i+1))); }
-  }
-  throw lastErr;
-}
-function normalizeSummary(data){
-  const title = data.title || "（無題）";
-  const blurb = data.description ? `${data.description}` : (data.extract ? (data.extract.split("。")[0] + "。") : "（概要なし）");
-  const detail = data.extract || "（詳細なし）";
-  const url = (data.content_urls && data.content_urls.desktop) ? data.content_urls.desktop.page : ("https://ja.wikipedia.org/wiki/" + encodeURIComponent(title));
-  return { title, blurb, detail, url, description: (data.description||"") };
-}
-
-// offline seed
-const LOCAL_SEED = ["熱力学第二法則", "量子もつれ", "シュレーディンガー方程式", "相対性理論", "オームの法則", "ファラデーの電磁誘導の法則", "DNA複製", "自然選択", "プレートテクトニクス", "ビッグバン理論", "銀河形成", "ブラックホール", "エントロピー", "ベイズ推定", "中心極限定理", "マルコフ過程", "フーリエ変換", "ラプラス変換", "偏微分方程式", "線形代数", "行列分解", "固有値", "ニューラルネットワーク", "サポートベクターマシン", "アルゴリズム", "データ構造", "計算量理論", "NP完全", "公開鍵暗号", "RSA暗号", "ハッシュ関数", "誤り訂正符号", "圧縮", "情報理論", "ゲーム理論", "囚人のジレンマ", "進化ゲーム", "認知バイアス", "プロスペクト理論", "強化学習", "Q学習", "グラフ理論", "ダイクストラ法", "最小全域木", "トポロジー", "位相空間", "群論", "環論", "体論", "ガロア理論", "相転移", "臨界現象", "イジング模型", "流体力学", "ナビエ–ストークス方程式", "乱流", "カオス理論", "フラクタル", "気候変動", "温室効果", "エルニーニョ", "太陽活動", "宇宙背景放射", "核融合", "太陽電池", "半導体", "トランジスタ", "材料科学", "超伝導", "フォノン", "フォトニクス", "レーザー", "光ファイバ", "量子コンピュータ", "量子誤り訂正", "ブロックチェーン", "分散システム", "コンセンサスアルゴリズム", "Raft", "Paxos", "CAP定理", "ネットワーク層", "TCP/IP", "HTTP", "データベース", "正規化", "トランザクション", "ACID特性", "可観測性", "モニタリング", "A/Bテスト", "因果推論", "操作変数法", "回帰不連続", "差分の差分", "メタ分析", "サンプルサイズ設計", "実験計画法", "応答曲面法"];
-
-// Memoized summaries
-const memo = new Map();
-const memoRelated = new Map();
-async function getSummary(title){
-  if (memo.has(title)) return memo.get(title);
-  try {
-    const d = await withBackoff(()=>fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(title), {timeout: 4000}));
-    const s = normalizeSummary(d); memo.set(title, s); return s;
-  } catch(e1){
-    try{
-      const d2 = await withBackoff(()=>fetchJSON("https://ja.wikipedia.org/w/api.php?action=opensearch&format=json&search=" + encodeURIComponent(title) + "&limit=1&namespace=0&origin=*", {timeout: 3500}));
-      const t = Array.isArray(d2) && d2[1] && d2[1][0] ? d2[1][0] : title;
-      const d3 = await withBackoff(()=>fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t), {timeout: 3500}));
-      const s = normalizeSummary(d3); memo.set(title, s); return s;
-    }catch(e2){
-      const s = { title, blurb:"（概要取得に失敗）", detail:"（詳細取得に失敗）", url: "https://ja.wikipedia.org/wiki/" + encodeURIComponent(title), description: "" };
-      memo.set(title, s); return s;
-    }
-  }
-}
-
-// Tokenization & scoring (light)
-function tokenize(summary){
-  const base = (summary.title + " " + (summary.description||"")).toLowerCase();
-  return base.split(/[^\p{L}\p{N}]+/u).filter(Boolean).slice(0, 30);
-}
-function scoreByProfile(summary){
-  const tags = topTags(20);
-  if (!tags.length) return 0;
-  const toks = tokenize(summary);
-  let score = 0;
-  for (const t of tags){
-    const w = profile.tags[t] || 0;
-    if (!w) continue;
-    for (const tok of toks){
-      if (tok.includes(t) || t.includes(tok)) { score += w; break; }
-    }
-  }
-  return score;
-}
-
-// Learn only on RELATED/WIKI (Open)
-async function learnFrom(summary){
-  try {
-    const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&prop=categories&clshow=!hidden&cllimit=20&titles=" + encodeURIComponent(summary.title) + "&origin=*";
-    const data = await withBackoff(()=>fetchJSON(url, {timeout: 3500}));
-    const pages = data?.query?.pages || {};
-    const first = Object.values(pages)[0];
-    const cats = (first?.categories || []).map(c => String(c.title||'').replace(/^Category:/, ''));
-    for (const c of cats) bumpTag(c, 1.6);
-  } catch(e){ /* ignore */ }
-  for (const tok of tokenize(summary)) if (tok.length >= 3) bumpTag(tok, 0.35);
-}
-
-
-// --- Robust button resolution by id, data-action, or visible text ---
-function resolveButton(primaryId, altIds, textHints){
-  const byId = (id)=> document.getElementById(id);
-  for (const id of [primaryId].concat(altIds||[])){
-    const el = byId(id);
-    if (el) return el;
-  }
-  // data-action
-  for (const hint of textHints||[]){
-    const el = document.querySelector(`[data-action*="${hint}"]`);
-    if (el) return el;
-  }
-  // by text content (button or a)
-  const nodes = Array.from(document.querySelectorAll('button, a, [role="button"]'));
-  function hasText(n){
-    const t = (n.textContent||"").trim();
-    return textHints.some(h => new RegExp(h, 'i').test(t));
-  }
-  for (const n of nodes){ if (hasText(n)) return n; }
-  return null;
-}
-
-// Re-resolve buttons after DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-  // DETAIL / MORE
-  const detailFallback = resolveButton('detailBtn', ['moreBtn','btnDetail','btnMore'], ['MORE','詳細','DETAIL']);
-  if (detailFallback) detailBtn = detailFallback;
-
-  // RELATED
-  const relatedFallback = resolveButton('relatedBtn', ['btnRelated','relBtn'], ['RELATED','関連']);
-  if (relatedFallback) relatedBtn = relatedFallback;
-
-  // WIKI / OPEN
-  const openFallback = resolveButton('openBtn', ['wikiBtn','btnOpen'], ['WIKI','OPEN','開く']);
-  if (openFallback) openBtn = openFallback;
-
-  // NEXT
-  const nextFallback = resolveButton('nextBtn', ['btnNext'], ['NEXT','次']);
-  if (nextFallback) nextBtn = nextFallback;
-});
-
-// Pool (tiny) & selection
+function // Pool (tiny) & selection
 let pool = [];
 let fetching = false;
 
@@ -342,6 +178,68 @@ if (nextBtn) nextBtn.addEventListener('click', () => { showOne(); });
 if (backBtn) backBtn.addEventListener('click', () => { showMain(); });
 if (clearBtn) clearBtn.addEventListener('click', () => { if (!altview.hidden) showMain(); });
 
+
+// ---- event listeners (clean, single-bind) ----
+bindOnce(relatedBtn, 'click', async () => {
+  if (!current) return;
+  await learnFrom(current);
+  showAlt("<h3>RELATED</h3><ul><li>loading…</li></ul>");
+  try {
+    // Try REST related first
+    const cacheKey = "rel:" + current.title;
+    if (!window._relCache) window._relCache = new Map();
+    if (window._relCache.has(cacheKey)) {
+      const items = window._relCache.get(cacheKey);
+      const html = items.length
+        ? `<h3>RELATED</h3><ul>${items.map((p,i)=>`<li>[${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${escapeHtml(p.title)}</a></li>`).join("")}</ul>`
+        : "<h3>RELATED</h3><ul><li>(no items)</li></ul>";
+      showAlt(html);
+      return;
+    }
+    let r = [];
+    try {
+      const d = await withBackoff(()=>fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/related/" + encodeURIComponent(current.title), {timeout: 4500}));
+      r = (d.pages || []).map(p => normalizeSummary(p));
+    } catch(e){ /* ignore */ }
+    // Fallback to search if needed
+    if (!r.length) {
+      try {
+        const q = encodeURIComponent(current.title + " -曖昧さ回避");
+        const s = await withBackoff(()=>fetchJSON("https://ja.wikipedia.org/w/api.php?action=opensearch&format=json&search="+q+"&limit=10&namespace=0&origin=*", {timeout: 4000}));
+        const titles = Array.isArray(s) && s[1] ? s[1] : [];
+        r = titles.slice(0,9).map(t => ({ title: t, blurb: "", detail: "", url: "https://ja.wikipedia.org/wiki/" + encodeURIComponent(t), description: "" }));
+      } catch(e){ /* ignore */ }
+    }
+    const items = r.slice(0,9);
+    if (!window._relCache) window._relCache = new Map();
+    window._relCache.set(cacheKey, items);
+    const html = items.length
+      ? `<h3>RELATED</h3><ul>${items.map((p,i)=>`<li>[${i+1}] <a href="${p.url}" target="_blank" rel="noopener">${escapeHtml(p.title)}</a></li>`).join("")}</ul>`
+      : `<h3>RELATED</h3><ul><li><a href="${current.url}" target="_blank" rel="noopener">WIKIを開く</a></li></ul>`;
+    showAlt(html);
+  } catch(e){
+    const html = `<h3>RELATED</h3><ul><li><a href="${current.url}" target="_blank" rel="noopener">WIKIを開く</a></li></ul>`;
+    showAlt(html);
+  }
+});
+
+bindOnce(openBtn, 'click', async () => {
+  if (!current) return;
+  await learnFrom(current);
+  const url = current?.url || (current?.title ? "https://ja.wikipedia.org/wiki/" + encodeURIComponent(current.title) : null);
+  if (url) window.open(url, '_blank', 'noopener');
+});
+
+bindOnce(detailBtn, 'click', async () => {
+  if (!current) return;
+  await learnFrom(current);
+  const html = `<h3>DETAIL</h3>${escapeHtml(current.detail)}\n\n<p><a href="${current.url}" target="_blank" rel="noopener">WIKIを開く</a></p>`;
+  showAlt(html);
+});
+
+bindOnce(nextBtn, 'click', () => { showOne(); });
+bindOnce(backBtn, 'click', () => { showMain(); });
+bindOnce(clearBtn, 'click', () => { if (!altview.hidden) showMain(); });
 // startup
 document.addEventListener('DOMContentLoaded', async () => {
   try { await refillPool(40); await showOne(); }
