@@ -1,21 +1,21 @@
 {
-  "name": "Siren Terminal",
-  "short_name": "SirenTerminal",
+  "name": "知のセイレーン（Wikipedia版）",
+  "short_name": "SirenWiki",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",
-  "theme_color": "#000000",
-  "version": "21.9.2",
+  "theme_color": "#ffffff",
   "icons": [
     {
-      "src": "icon-192.png",
+      "src": "./icon-192.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "icon-512.png",
+      "src": "./icon-512.png",
       "sizes": "512x512",
       "type": "image/png"
     }
-  ]
+  ],
+  "version": "22.1.0"
 }
