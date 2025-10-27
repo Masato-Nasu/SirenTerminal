@@ -304,5 +304,6 @@ if (location.protocol.startsWith('http') && 'serviceWorker' in navigator) {
 }
 
 function escapeHtml(str){
-  return String(str).replace(/[&<>\"']/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',\"'\":'&#39;'}[s]));
+  const map = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'};
+  return String(str).replace(/[&<>"']/g, s => map[s]);
 }
