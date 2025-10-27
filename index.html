@@ -1,47 +1,43 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Siren Terminal</title>
-  <link rel="manifest" href="manifest.json" />
-  <link rel="stylesheet" href="style.css" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>知のセイレーン</title>
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
+  <style>
+    body{font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', 'Yu Gothic', 'Meiryo', sans-serif; margin:20px; color:#111;}
+    .wrap{max-width:520px; margin:0 auto;}
+    .card{border:1px solid #999; min-height:320px; display:flex; align-items:center; justify-content:center; padding:24px; border-radius:6px;}
+    h1{font-size:18px; margin:0 0 8px;}
+    #title{font-weight:700; font-size:16px; margin:0 0 12px;}
+    #blurb{font-size:14px; line-height:1.6;}
+    .btn{display:block; width:100%; padding:10px 12px; margin:10px 0; border:1px solid #333; background:#fff; border-radius:4px; text-align:center; cursor:pointer; user-select:none;}
+    .small{font-size:12px; color:#555; text-align:center; margin-top:8px;}
+    #altview{display:block; white-space:pre-wrap; line-height:1.6;}
+    .hidden{display:none;}
+  </style>
 </head>
 <body>
-  <main class="wrap">
-    <section id="screen" aria-live="polite">
+  <div class="wrap">
+    <div class="card">
       <div id="maintext">
-        <div id="title" class="ttl">起動中…</div>
-        <div id="blurb" class="blurb">読み込み中</div>
+        <div id="status" class="small">起動中…<br>読み込み中</div>
+        <div id="title"></div>
+        <div id="blurb"></div>
       </div>
-      <div id="altview" hidden></div>
-    </section>
-
-    <div class="stack">
-      <div class="select-wrap btn" id="genreWrap">
-        <span class="select-label">GENRE</span>
-        <select id="genreSel" aria-label="ジャンルを選択">
-          <option value="all" selected>すべて</option>
-          <option value="哲学">哲学</option>
-          <option value="科学">科学</option>
-          <option value="数学">数学</option>
-          <option value="技術">技術</option>
-          <option value="芸術">芸術</option>
-          <option value="言語学">言語学</option>
-          <option value="心理学">心理学</option>
-          <option value="歴史">歴史</option>
-          <option value="文学">文学</option>
-        </select>
-      </div>
-
-      <button class="btn red" id="nextBtn">NEXT</button>
-      <button class="btn" id="detailBtn">MORE</button>
-      <button class="btn" id="relatedBtn">RELATED</button>
-      <button class="btn" id="openBtn">OPEN WIKI</button>
-      <button class="btn" id="clearBtn">CLEAR</button>
-      <button class="btn" id="backBtn" hidden>BACK</button>
+      <div id="altview" class="hidden"></div>
     </div>
-  </main>
+
+    <!-- Buttons (minimal) -->
+    <button id="nextBtn" class="btn">NEXT</button>
+    <button id="detailBtn" class="btn">MORE</button>
+    <button id="openBtn" class="btn">OPEN WIKI</button>
+    <button id="backBtn" class="btn hidden">BACK</button>
+
+    <div class="small">v21.8.9b</div>
+  </div>
 
   <script src="script.v2189a.js"></script>
 </body>
