@@ -1,5 +1,5 @@
 // v21 cache bump & network-first for external APIs
-const CACHE_NAME = 'siren-terminal-v21-4';
+const CACHE_NAME = 'siren-terminal-v21-6-6';
 const FILES_TO_CACHE = [
   './index.html','./style.css','./script.js','./manifest.json','./icon-192.png','./icon-512.png'
 ];

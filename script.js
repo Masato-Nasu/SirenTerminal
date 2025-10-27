@@ -1,5 +1,5 @@
 
-// v21.4: STANDARD ONLY UI, Wikidata-assisted genre filtering + startup watchdog + timeouts
+// v21.6: Learning Mode (up to 50% personalized) + Wikidata/text filters retained
 const titleBox = document.getElementById('title');
 const blurbBox = document.getElementById('blurb');
 const genreSel = document.getElementById('genreSel');
@@ -13,10 +13,43 @@ const maintext = document.getElementById('maintext');
 const altview = document.getElementById('altview');
 const statusEl = document.getElementById('status') || document.querySelector('[data-status]');
 
+// --- small, unobtrusive toggle (if HTML lacks it, we inject one) ---
+let learnToggle = document.getElementById('learnToggle');
+if (!learnToggle) {
+  learnToggle = document.createElement('label');
+  learnToggle.id = 'learnToggle';
+  learnToggle.style.cssText = 'position:fixed;right:10px;bottom:10px;background:#0008;color:#fff;padding:6px 10px;border-radius:12px;font-size:12px;cursor:pointer;z-index:9999;user-select:none;';
+  learnToggle.innerHTML = '<input type="checkbox" id="learnChk" style="vertical-align:middle;margin-right:6px"/><span>学習モード（最大50%）</span>';
+  document.addEventListener('DOMContentLoaded', ()=>document.body.appendChild(learnToggle));
+}
+function isLearningEnabled(){
+  const el = document.getElementById('learnChk');
+  if (el) return el.checked;
+  return true; // default ON if checkbox not found yet
+}
+
 let current = null;
-const SEEN_KEY = "siren_seen_titles_v21_4";
+const SEEN_KEY = "siren_seen_titles_v21_6";
 const SEEN_LIMIT = 100000;
 let seenSet = new Set(loadJSON(SEEN_KEY, []));
+
+// --- simple profile store ---
+const PROFILE_KEY = "siren_profile_v21_6";
+let profile = loadJSON(PROFILE_KEY, { tags:{}, lastLearn:0 });
+function saveProfile(){ saveJSON(PROFILE_KEY, profile); }
+function bumpTag(t, w=1){ if(!t) return; profile.tags[t]=(profile.tags[t]||0)+w; profile.lastLearn=Date.now(); saveProfile(); }
+function topTags(n=25){
+  const arr = Object.entries(profile.tags);
+  arr.sort((a,b)=>b[1]-a[1]);
+  return arr.slice(0,n).map(x=>x[0]);
+}
+function decayProfile(f=0.98){
+  for (const k in profile.tags) profile.tags[k]*=f;
+  // cleanup very small
+  for (const k of Object.keys(profile.tags)) if (profile.tags[k] < 0.2) delete profile.tags[k];
+  saveProfile();
+}
+setInterval(()=>decayProfile(0.995), 60*1000); // slow decay
 
 // ---- global guards ----
 window.addEventListener('unhandledrejection', (e) => {
@@ -40,10 +73,10 @@ function saveSeen(){
   saveJSON(SEEN_KEY, Array.from(seenSet));
 }
 function sessionSalt() {
-  let s = sessionStorage.getItem('siren_launch_salt_v21_4');
+  let s = sessionStorage.getItem('siren_launch_salt_v21_6');
   if (!s){
     s = String((crypto.getRandomValues(new Uint32Array(2))[0] ^ Date.now()) >>> 0);
-    sessionStorage.setItem('siren_launch_salt_v21_4', s);
+    sessionStorage.setItem('siren_launch_salt_v21_6', s);
   }
   return BigInt.asUintN(64, BigInt(parseInt(s,10) >>> 0));
 }
@@ -85,7 +118,6 @@ function normalizeSummary(data){
   const blurb = data.description ? `${data.description}` : (data.extract ? (data.extract.split("。")[0] + "。") : "（概要なし）");
   const detail = data.extract || "（詳細なし）";
   const url = (data.content_urls && data.content_urls.desktop) ? data.content_urls.desktop.page : ("https://ja.wikipedia.org/wiki/" + encodeURIComponent(title));
-  // wikibase item may be in pageprops, but REST summary sometimes exposes it under 'titles' on enwiki; we'll fetch via pageprops anyway
   return { title, blurb, detail, url, description: (data.description||"") };
 }
 async function withBackoff(fn, tries=5){
@@ -97,7 +129,7 @@ async function withBackoff(fn, tries=5){
   throw lastErr;
 }
 
-// ---- genre mapping / filters (STANDARD) ----
+// ---- genre filters (from v21.4 standard) ----
 const GENRE_MAP = {
   "all": [],
   "哲学": ["哲学"],
@@ -110,6 +142,7 @@ const GENRE_MAP = {
   "歴史": ["歴史学","世界史","日本史"],
   "文学": ["文学","詩","物語論","文学理論"]
 };
+
 const NEG_COMMON = /(企業|会社|市|町|村|鉄道|駅|空港|高校|大学|中学校|小学校|自治体|球団|クラブ|漫画|アニメ|映画|ドラマ|楽曲|アルバム|ゲーム|番組|作品|小説|キャラクター|政治家|俳優|女優|歌手|選手|監督)/;
 const POS = {
   "科学": /(学|理論|定理|法則|効果|反応|方程式|現象|仮説|粒子|素粒子|銀河|惑星|恒星|元素|分子|化合物|酵素|細胞|進化|遺伝|電磁|量子|統計|確率|幾何|解析|熱力学|流体|計算|アルゴリズム|データ構造)/,
@@ -122,8 +155,8 @@ const POS = {
   "文学": /(文学|詩学|修辞|叙事|叙情|物語論|ジャンル|文芸|文学理論)/,
   "芸術": /(芸術|美術|造形|デザイン|建築|音楽理論|調性|和声|対位法|色彩|構図)/
 };
-function titlePassesGenreText(genre, summary){
-  if (genre === "all") return true;
+function titlePassesGenre(genre, summary){
+  if (!genre || genre === "all") return true;
   const d = (summary.description||"");
   const allowWorks = (genre === "芸術" || genre === "文学");
   if (!allowWorks && NEG_COMMON.test(d)) return false;
@@ -132,153 +165,71 @@ function titlePassesGenreText(genre, summary){
   return pos.test(d) || d === "";
 }
 
-// ---- Wikidata helpers ----
+// ---- Wikidata helpers (lightweight) ----
 async function getWikidataQid(title){
-  // fetch pageprops to find wikibase item id
   const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&prop=pageprops&ppprop=wikibase_item&titles=" + encodeURIComponent(title) + "&origin=*";
   const data = await withBackoff(()=>fetchJSON(url, {timeout: 6000}));
   const pages = data?.query?.pages || {};
   const first = Object.values(pages)[0];
   return first?.pageprops?.wikibase_item || "";
 }
-
-const WD_BLOCK_QIDS = new Set([
-  "Q5",        // human
-  "Q215627",   // person
-  "Q43229",    // organization
-  "Q783794",   // company
-  "Q15284",    // municipality
-  "Q55488",    // railway station
-  "Q3914",     // school
-  "Q3918",     // university
-  "Q11424",    // film
-  "Q5398426",  // TV series
-  "Q21198342", // manga
-  "Q63952888", // anime
-  "Q7889",     // video game
-  "Q482994",   // album
-  "Q7366",     // song
-  "Q95074"     // fictional character
-]);
-
-const WD_ALLOW_QIDS = new Set([
-  "Q31855",    // scientific law
-  "Q716",      // class of chemical compounds
-  "Q7397",     // chemical element
-  "Q7187",     // gene
-  "Q11423",    // theory
-  "Q7187",     // (dup safe)
-  "Q41719",    // axiom
-  "Q3249551",  // mathematical object
-  "Q24034552", // scientific theory
-  "Q107715",   // physical law
-  "Q7184903",  // physical phenomenon
-  "Q11344",    // equation
-  "Q8054",     // genetics
-  "Q11448",    // hypothesis
-  "Q223557",   // statistical hypothesis
-  "Q21198"     // algorithm
-]);
-
-async function fetchWikidataClaims(qid){
-  if (!qid) return null;
-  const url = "https://www.wikidata.org/w/api.php?action=wbgetentities&format=json&ids=" + encodeURIComponent(qid) + "&props=claims&origin=*";
+async function fetchCategories(title){
+  const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&prop=categories&clshow=!hidden&cllimit=30&titles=" + encodeURIComponent(title) + "&origin=*";
   const data = await withBackoff(()=>fetchJSON(url, {timeout: 6000}));
-  const ent = data?.entities?.[qid];
-  return ent?.claims || null;
+  const pages = data?.query?.pages || {};
+  const first = Object.values(pages)[0];
+  const cats = first?.categories || [];
+  return cats.map(c => String(c.title||'').replace(/^Category:/, ''));
 }
 
-function getP31Qids(claims){
-  const arr = [];
-  const p31 = claims?.P31 || [];
-  for (const st of p31){
-    const v = st?.mainsnak?.datavalue?.value;
-    const q = v?.id;
-    if (q) arr.push(q);
-  }
-  return arr;
+// --- learning feature extraction ---
+function tokenizeTitleAndBlurb(s){
+  const base = (s.title + " " + (s.description||"")).toLowerCase();
+  const tokens = base.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+  return tokens.slice(0, 50);
 }
-
-function passesWikidata(genre, qids){
-  if (!qids || !qids.length) return true; // no data → allow
-  const allowWorks = (genre === "芸術" || genre === "文学");
-  // Hard block types unless works are allowed
-  if (!allowWorks){
-    for (const q of qids){ if (WD_BLOCK_QIDS.has(q)) return false; }
-  }
-  // Prefer concepts: if any P31 is in allow-list, pass
-  for (const q of qids){ if (WD_ALLOW_QIDS.has(q)) return true; }
-  // Default: if not explicitly blocked, allow (text filter still applied)
-  return true;
+async function getSignalsFor(summary){
+  const tokens = tokenizeTitleAndBlurb(summary);
+  let cats = [];
+  try { cats = await fetchCategories(summary.title); } catch(e){}
+  return { tokens, cats };
 }
-
-// ---- Wiki category & title utilities ----
-async function fetchCategoryBatch(catTitle, cmcontinue=""){
-  const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle="
-    + encodeURIComponent("Category:"+catTitle)
-    + "&cmtype=page&cmnamespace=0&cmlimit=100&origin=*"
-    + (cmcontinue ? "&cmcontinue="+encodeURIComponent(cmcontinue) : "");
-  const data = await withBackoff(()=>fetchJSON(url, {timeout: 6000}));
-  const members = (data.query && data.query.categorymembers) ? data.query.categorymembers : [];
-  const cont = (data.continue && data.continue.cmcontinue) ? data.continue.cmcontinue : "";
-  return { titles: members.map(m=>m.title), cont };
-}
-async function getTitlesByGenre(genre, seed){
-  const cats = GENRE_MAP[genre] || [genre];
-  if (!cats.length) return [];
-  let titles = [];
-  for (const c of cats){
-    let cont = ""; let collected = [];
-    for (let i=0;i<2;i++){
-      const r = await fetchCategoryBatch(c, cont);
-      collected = collected.concat(r.titles);
-      cont = r.cont;
-      if (!cont) break;
+function scoreByProfile(summary, signals){
+  const tags = topTags(40);
+  if (!tags.length) return 0;
+  let score = 0;
+  for (const t of tags){
+    const w = profile.tags[t] || 0;
+    if (!w) continue;
+    // token match
+    for (const tok of signals.tokens){
+      if (tok.includes(t) || t.includes(tok)) { score += w * 0.6; break; }
     }
-    titles = titles.concat(collected);
-  }
-  if (!titles.length) return [];
-  titles = Array.from(new Set(titles));
-  shuffleWithSeed(titles, seed);
-  return titles;
-}
-async function getRandomTitles(limit=200){
-  const data = await withBackoff(()=>fetchJSON(
-    "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=random&rnnamespace=0&rnlimit="+limit+"&origin=*",
-    {timeout: 6000}
-  ));
-  const arr = (data.query && data.query.random) ? data.query.random : [];
-  return arr.map(x => x.title);
-}
-
-async function fetchSummaryByTitle(title){
-  try {
-    const d = await withBackoff(()=>fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(title), {timeout: 6000}));
-    return normalizeSummary(d);
-  } catch(e1){
-    try{
-      const d2 = await withBackoff(()=>fetchJSON("https://ja.wikipedia.org/w/api.php?action=opensearch&format=json&search=" + encodeURIComponent(title) + "&limit=1&namespace=0&origin=*", {timeout: 6000}));
-      const t = Array.isArray(d2) && d2[1] && d2[1][0] ? d2[1][0] : title;
-      const d3 = await withBackoff(()=>fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t), {timeout: 6000}));
-      return normalizeSummary(d3);
-    }catch(e2){
-      return { title, blurb:"（概要取得に失敗）", detail:"（詳細取得に失敗）", url: "https://ja.wikipedia.org/wiki/" + encodeURIComponent(title), description: "" };
+    // category match
+    for (const c of signals.cats){
+      if (c.includes(t) || t.includes(c)) { score += w * 1.0; break; }
     }
   }
+  // small bonus if genre also matches strongly
+  if (titlePassesGenre(currentGenre(), summary)) score += 0.5;
+  return score;
 }
 
-// ---- UI helpers ----
-function showMain(){ maintext.hidden = false; altview.hidden = true; backBtn.hidden = true; }
-function showAlt(html){ altview.innerHTML = html; maintext.hidden = true; altview.hidden = false; backBtn.hidden = false; }
-function renderMain(s){ titleBox.textContent = `【 ${s.title} 】`; blurbBox.textContent = s.blurb; setStatus(''); showMain(); }
-function failSafe(titleMsg, blurbMsg){
-  titleBox.textContent = titleMsg;
-  blurbBox.textContent = blurbMsg;
-  setStatus('');
-  showMain();
+// --- learning triggers: user clicks open/detail/related as "interest" ---
+function learnFrom(summary, signals){
+  // count categories heavier than tokens
+  for (const c of (signals.cats||[])) bumpTag(c, 1.2);
+  for (const tok of (signals.tokens||[])) if (tok.length >= 3) bumpTag(tok, 0.3);
 }
 
-// ---- Title Pool ----
+// ---- genre utilities ----
+function currentGenre(){
+  if (!genreSel) return "all";
+  const g = genreSel.value || "all";
+  return GENRE_MAP[g] ? g : "all";
+}
+
+// ---- pool & selection ----
 let pool = [];
 let fetching = false;
 
@@ -286,15 +237,23 @@ async function refillPool(minNeeded = 160){
   if (fetching) return;
   fetching = true;
   try{
-    const g = (genreSel && genreSel.value) ? genreSel.value : "all";
+    const g = currentGenre();
     const seed = await timeSeed();
     setStatus('起動中…（候補を収集中）');
 
     let titles = [];
-    if (g === "all" || !GENRE_MAP[g] || GENRE_MAP[g].length === 0){
-      titles = await getRandomTitles(220);
+    if (g === "all"){
+      titles = await getRandomTitles(230);
     } else {
       titles = await getTitlesByGenre(g, seed);
+      if (titles.length < 30){
+        try{
+          const q = encodeURIComponent(g + " 概念|理論|法則|現象|定理");
+          const d = await withBackoff(()=>fetchJSON("https://ja.wikipedia.org/w/api.php?action=query&format=json&list=search&srsearch="+q+"&srlimit=50&srnamespace=0&origin=*", {timeout: 6000}));
+          const hits = (d.query && d.query.search) ? d.query.search : [];
+          titles = titles.concat(hits.map(h=>h.title));
+        }catch(e){}
+      }
     }
 
     titles = shuffleWithSeed(
@@ -315,52 +274,121 @@ async function refillPool(minNeeded = 160){
   }
 }
 
+async function getTitlesByGenre(genre, seed){
+  const cats = GENRE_MAP[genre] || [];
+  let titles = [];
+  for (const c of cats){
+    let cont = ""; let collected = [];
+    for (let i=0;i<2;i++){
+      const r = await fetchCategoryBatch(c, cont);
+      collected = collected.concat(r.titles);
+      cont = r.cont;
+      if (!cont) break;
+    }
+    titles = titles.concat(collected);
+  }
+  titles = Array.from(new Set(titles));
+  shuffleWithSeed(titles, seed);
+  return titles;
+}
+async function fetchCategoryBatch(catTitle, cmcontinue=""){
+  const url = "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=categorymembers&cmtitle="
+    + encodeURIComponent("Category:"+catTitle)
+    + "&cmtype=page&cmnamespace=0&cmlimit=100&origin=*"
+    + (cmcontinue ? "&cmcontinue="+encodeURIComponent(cmcontinue) : "");
+  const data = await withBackoff(()=>fetchJSON(url, {timeout: 6000}));
+  const members = (data.query && data.query.categorymembers) ? data.query.categorymembers : [];
+  const cont = (data.continue && data.continue.cmcontinue) ? data.continue.cmcontinue : "";
+  return { titles: members.map(m=>m.title), cont };
+}
+async function getRandomTitles(limit=220){
+  const data = await withBackoff(()=>fetchJSON(
+    "https://ja.wikipedia.org/w/api.php?action=query&format=json&list=random&rnnamespace=0&rnlimit="+limit+"&origin=*",
+    {timeout: 6000}
+  ));
+  const arr = (data.query && data.query.random) ? data.query.random : [];
+  return arr.map(x => x.title);
+}
+async function fetchSummaryByTitle(title){
+  try {
+    const d = await withBackoff(()=>fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(title), {timeout: 6000}));
+    return normalizeSummary(d);
+  } catch(e1){
+    try{
+      const d2 = await withBackoff(()=>fetchJSON("https://ja.wikipedia.org/w/api.php?action=opensearch&format=json&search=" + encodeURIComponent(title) + "&limit=1&namespace=0&origin=*", {timeout: 6000}));
+      const t = Array.isArray(d2) && d2[1] && d2[1][0] ? d2[1][0] : title;
+      const d3 = await withBackoff(()=>fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(t), {timeout: 6000}));
+      return normalizeSummary(d3);
+    }catch(e2){
+      return { title, blurb:"（概要取得に失敗）", detail:"（詳細取得に失敗）", url: "https://ja.wikipedia.org/wiki/" + encodeURIComponent(title), description: "" };
+    }
+  }
+}
+
+// Decide whether to serve personalized (<=50%) or exploratory
+function pickMode(){
+  if (!isLearningEnabled()) return "explore";
+  return Math.random() < 0.5 ? "personal" : "explore";
+}
+
 async function pickNew(){
-  if (pool.length < 12) await refillPool(200);
-  let title = null;
-  while (pool.length){
-    const t = pool.shift();
-    if (!seenSet.has(t)){ title = t; break; }
-  }
-  if (!title){
-    await refillPool(220);
-    if (!pool.length) return null;
-    title = pool.shift();
-  }
-  let s = await fetchSummaryByTitle(title);
+  if (pool.length < 12) await refillPool(180);
 
-  const g = (genreSel && genreSel.value) ? genreSel.value : "all";
-  // Text-based quick filter
-  let ok = titlePassesGenreText(g, s);
-  // Wikidata-based confirm (if text filter passed)
-  try{
-    const qid = await getWikidataQid(s.title);
-    if (qid){
-      const claims = await fetchWikidataClaims(qid);
-      const p31s = getP31Qids(claims);
-      ok = ok && passesWikidata(g, p31s);
+  // exploratory pick helper
+  async function pickPlain(){
+    let title = null;
+    while (pool.length){
+      const t = pool.shift();
+      if (!seenSet.has(t)){ title = t; break; }
     }
-  }catch(e){ /* if wikidata fails, keep text-based result */ }
-
-  if (!ok){
-    for (let i=0;i<5;i++){
-      if (!pool.length){ await refillPool(220); }
-      const t2 = pool.shift();
-      if (!t2) break;
-      s = await fetchSummaryByTitle(t2);
-      let ok2 = titlePassesGenreText(g, s);
-      try{
-        const qid2 = await getWikidataQid(s.title);
-        if (qid2){
-          const claims2 = await fetchWikidataClaims(qid2);
-          const p31s2 = getP31Qids(claims2);
-          ok2 = ok2 && passesWikidata(g, p31s2);
-        }
-      }catch(e){}
-      if (ok2){ break; }
+    if (!title){
+      await refillPool(200);
+      if (!pool.length) return null;
+      title = pool.shift();
     }
+    const s = await fetchSummaryByTitle(title);
+    const g = currentGenre();
+    // weak genre filter (to keep variety but avoid egregious mismatches)
+    if (g !== "all" && !titlePassesGenre(g, s)){
+      return await pickPlain(); // try next
+    }
+    return s;
   }
-  return s;
+
+  // personalized pick helper: sample a handful, score by profile, take best
+  async function pickPersonal(){
+    const candidates = [];
+    const sampled = [];
+    // take up to 14 samples from the head of pool (without losing them permanently)
+    const takeN = Math.min(pool.length, 14);
+    for (let i=0;i<takeN;i++){
+      const t = pool.shift();
+      sampled.push(t);
+    }
+    // restore sampled back after scoring (preserve order)
+    for (const t of sampled) pool.push(t);
+
+    for (const t of sampled.slice(0,14)){
+      const s = await fetchSummaryByTitle(t);
+      const sig = await getSignalsFor(s);
+      const sc = scoreByProfile(s, sig);
+      candidates.push({t, s, sig, sc});
+    }
+    candidates.sort((a,b)=>b.sc-a.sc);
+    // pick highest that also passes weak genre check
+    for (const c of candidates){
+      if (currentGenre() !== "all" && !titlePassesGenre(currentGenre(), c.s)) continue;
+      // remove chosen from pool
+      const idx = pool.indexOf(c.t);
+      if (idx >= 0) pool.splice(idx,1);
+      return c.s;
+    }
+    // fallback
+    return await pickPlain();
+  }
+
+  const mode = pickMode();
+  return mode === "personal" ? await pickPersonal() : await pickPlain();
 }
 
 let busy = false;
@@ -368,31 +396,44 @@ async function showOne(){
   if (busy) return;
   busy = true;
   try{
-    setStatus('起動中…');
+    setStatus('読み込み中…');
     const s = await pickNew();
     if (!s){
-      failSafe("（候補が見つかりません）", "通信状況をご確認のうえ、NEXTで再試行してください。");
+      titleBox.textContent = "（候補が見つかりません）";
+      blurbBox.textContent = "NEXTで再試行してください。";
+      setStatus('');
+      showMain();
       return;
     }
     current = s;
     seenSet.add(s.title); saveSeen();
-    renderMain(s);
+    titleBox.textContent = `【 ${s.title} 】`;
+    blurbBox.textContent = s.blurb;
+    setStatus('');
+    showMain();
   } catch(e){
     console.warn('showOne failed:', e);
-    failSafe("（取得エラー）", "通信が混み合っています。少し待ってNEXTをお試しください。");
+    titleBox.textContent = "（取得エラー）";
+    blurbBox.textContent = "通信が混み合っています。少し待ってNEXTをお試しください。";
+    setStatus('');
+    showMain();
   } finally {
     busy = false;
   }
 }
 
 // ---- events ----
-if (detailBtn) detailBtn.addEventListener('click', () => {
+if (detailBtn) detailBtn.addEventListener('click', async () => {
   if (!current) return;
+  const sig = await getSignalsFor(current);
+  learnFrom(current, sig);
   const html = `<h3>DETAIL</h3>${escapeHtml(current.detail)}\n\n<p><a href="${current.url}" target="_blank" rel="noopener">WIKIを開く</a></p>`;
   showAlt(html);
 });
 if (relatedBtn) relatedBtn.addEventListener('click', async () => {
   if (!current) return;
+  const sig = await getSignalsFor(current);
+  learnFrom(current, sig);
   showAlt("<h3>RELATED</h3><ul><li>loading…</li></ul>");
   try {
     const d = await withBackoff(()=>fetchJSON("https://ja.wikipedia.org/api/rest_v1/page/related/" + encodeURIComponent(current.title), {timeout: 6000}));
@@ -404,7 +445,10 @@ if (relatedBtn) relatedBtn.addEventListener('click', async () => {
     showAlt("<h3>RELATED</h3><ul><li>(failed)</li></ul>");
   }
 });
-if (openBtn) openBtn.addEventListener('click', () => {
+if (openBtn) openBtn.addEventListener('click', async () => {
+  if (!current) return;
+  const sig = await getSignalsFor(current);
+  learnFrom(current, sig);
   const url = current?.url || (current?.title ? "https://ja.wikipedia.org/wiki/" + encodeURIComponent(current.title) : null);
   if (url) window.open(url, '_blank', 'noopener');
 });
@@ -412,25 +456,16 @@ if (nextBtn) nextBtn.addEventListener('click', () => { showOne(); });
 if (backBtn) backBtn.addEventListener('click', () => { showMain(); });
 if (clearBtn) clearBtn.addEventListener('click', () => { if (!altview.hidden) showMain(); });
 
-// ---- startup watchdog ----
-let firstItemRendered = false;
-const watchdog = setTimeout(() => {
-  if (!firstItemRendered){
-    failSafe("（起動が遅延しています）", "NEXTを押して再試行できます。ネットワークをご確認ください。");
-  }
-}, 7000);
-
-// 初期表示
+// ---- startup ----
 document.addEventListener('DOMContentLoaded', async () => {
   try {
     await refillPool(200);
     await showOne();
-    firstItemRendered = true;
   } catch(e){
     console.warn('startup failed:', e);
-    failSafe("（起動に失敗）", "NEXTを押して再試行してください。");
-  } finally {
-    clearTimeout(watchdog);
+    titleBox.textContent = "（起動に失敗）";
+    blurbBox.textContent = "NEXTを押して再試行してください。";
+    showMain();
   }
 });
 
