@@ -21,15 +21,11 @@
     #altview{display:block;white-space:pre-wrap;line-height:1.7}
     .hidden{display:none}
 
-    /* minimal modal with safe fit */
+    /* minimal modal safe fit */
     .modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35);backdrop-filter:saturate(180%) blur(4px);}
     .panel{width:min(680px,92vw);background:#fff;border-radius:14px;border:1px solid #ddd;box-shadow:0 10px 30px rgba(0,0,0,.12);padding:16px;box-sizing:border-box}
     .titleline{font-weight:700;margin:0 0 10px 2px}
-    .row{margin:0}
     .row input{width:100%;max-width:100%;display:block;padding:12px 14px;border:1px solid #bbb;border-radius:10px;font-size:14px;box-sizing:border-box}
-    @media (max-width:480px){
-      .panel{width:min(94vw, 440px); padding:14px}
-    }
   </style>
 </head>
 <body>
@@ -50,14 +46,14 @@
       <div id="altview" class="hidden"></div>
     </div>
 
-    <button id="nextBtn" class="btn">NEXT</button>
+    <button id="nextBtn" class="btn">NEXT（関連優先）</button>
     <button id="detailBtn" class="btn">MORE</button>
     <button id="openBtn" class="btn">OPEN WIKI</button>
     <button id="backBtn" class="btn hidden">BACK</button>
 
-    <div class="small">v22.3.3</div>
+    <div class="small">v22.3.5</div>
   </div>
 
-  <script src="script.v2232.js"></script>
+  <script src="script.v2235.js"></script>
 </body>
 </html>
