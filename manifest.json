@@ -1,5 +1,5 @@
 {
-  "name": "知のセイレーン",
+  "name": "Siren Terminal",
   "short_name": "Siren",
   "start_url": "./index.html",
   "display": "standalone",
@@ -17,5 +17,5 @@
       "type": "image/png"
     }
   ],
-  "version": "22.6.6b-nofilter-nobadge"
+  "version": "22.6.7-smartdate"
 }
