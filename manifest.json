@@ -1,6 +1,6 @@
 {
-  "name": "知のセイレーン v22.4.0（キーワード即関連・高速）",
-  "short_name": "Siren-2240",
+  "name": "知のセイレーン v22.4.1（自動遷移＋アンチ二重）",
+  "short_name": "Siren-2241",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",
@@ -17,5 +17,5 @@
       "type": "image/png"
     }
   ],
-  "version": "22.4.0"
+  "version": "22.4.1"
 }
