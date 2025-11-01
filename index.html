@@ -3,43 +3,33 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>知のセイレーン</title>
+  <title>知のセイレーン（Lite）</title>
   <link rel="manifest" href="./manifest.json">
   <link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
   <meta name="theme-color" content="#ffffff">
   <style>
     :root{color-scheme:light dark}
     html,body{height:100%}
-    body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP","Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,sans-serif;margin:0;background:#fafafa;color:#111}
-    .wrap{max-width:720px;margin:0 auto;padding:18px}
-    .card{border:1px solid #ddd;border-radius:12px;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.05);padding:16px;min-height:240px}
-    #title{font-weight:700;font-size:18px;margin:4px 0 10px}
+    body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP","Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,sans-serif;margin:0;background:#fff;color:#111}
+    .wrap{max-width:720px;margin:0 auto;padding:12px}
+    .card{border:1px solid #ddd;border-radius:10px;background:#fff;padding:12px;min-height:180px}
+    #title{font-weight:700;font-size:17px;margin:2px 0 8px}
     #blurb{font-size:14px;line-height:1.7;white-space:pre-wrap}
-    .btn{display:block;width:100%;padding:12px 14px;margin:10px 0;border:1px solid #333;background:#fff;border-radius:10px;text-align:center;cursor:pointer;user-select:none}
-    .btn:active{transform:translateY(1px)}
+    .btn{display:block;width:100%;padding:10px 12px;margin:8px 0;border:1px solid #333;background:#fff;border-radius:10px;text-align:center;cursor:pointer;user-select:none}
     .btn[disabled]{opacity:.5;cursor:not-allowed}
     .small{font-size:12px;color:#666;text-align:center;margin-top:6px}
     #altview{display:block;white-space:pre-wrap;line-height:1.7}
     .hidden{display:none !important;visibility:hidden !important;opacity:0 !important;pointer-events:none !important}
-
-    /* Input bar (summonable) */
-    .ibar{display:none;margin:8px 0 0 0}
-    .ibar.show{display:flex;gap:8px;align-items:center}
-    .ibar input{flex:1;padding:10px 12px;border:1px solid #bbb;border-radius:10px;font-size:14px}
-    .mini{padding:10px 12px;border:1px solid #333;background:#fff;border-radius:10px;cursor:pointer}
-    .row{display:flex;gap:10px}
+    .row{display:flex;gap:8px;align-items:center}
+    .mini{padding:8px 10px;border:1px solid #333;background:#fff;border-radius:10px;cursor:pointer}
+    #prefInput{flex:1;padding:8px 10px;border:1px solid #bbb;border-radius:10px;font-size:14px}
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="row">
-      <button id="summonBtn" class="mini" title="Ctrl+K / /">入力</button>
-    </div>
-
-    <div id="ibar" class="ibar" role="search">
-      <input id="prefInput" autocomplete="off" spellcheck="false" placeholder="キーワード（例：拳銃 現象学 9mm など）">
+      <input id="prefInput" placeholder="キーワード（任意）" autocomplete="off" spellcheck="false">
       <button id="applyBtn" class="mini">OK</button>
-      <button id="hideBtn" class="mini" title="閉じる">×</button>
     </div>
 
     <div class="card">
@@ -56,9 +46,9 @@
     <button id="openBtn" class="btn">OPEN WIKI</button>
     <button id="backBtn" class="btn hidden">BACK</button>
 
-    <div class="small">v22.4.3</div>
+    <div class="small">v22.5.0-lite</div>
   </div>
 
-  <script src="script.v2243.js" defer></script>
+  <script src="script.v2250-lite.js" defer></script>
 </body>
 </html>
