@@ -21,22 +21,22 @@
     #altview{display:block;white-space:pre-wrap;line-height:1.7}
     .hidden{display:none}
 
-    /* minimal modal */
+    /* minimal modal with safe fit */
     .modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35);backdrop-filter:saturate(180%) blur(4px);}
-    .panel{width:min(720px,92vw);background:#fff;border-radius:14px;border:1px solid #ddd;box-shadow:0 10px 30px rgba(0,0,0,.12);padding:18px}
-    .titleline{font-weight:700;margin-bottom:10px}
-    .row input{width:100%;padding:12px 14px;border:1px solid #bbb;border-radius:10px;font-size:14px}
-    .sr-only{position:absolute;left:-9999px;top:auto;width:1px;height:1px;overflow:hidden}
+    .panel{width:min(680px,92vw);background:#fff;border-radius:14px;border:1px solid #ddd;box-shadow:0 10px 30px rgba(0,0,0,.12);padding:16px;box-sizing:border-box}
+    .titleline{font-weight:700;margin:0 0 10px 2px}
+    .row{margin:0}
+    .row input{width:100%;max-width:100%;display:block;padding:12px 14px;border:1px solid #bbb;border-radius:10px;font-size:14px;box-sizing:border-box}
+    @media (max-width:480px){
+      .panel{width:min(94vw, 440px); padding:14px}
+    }
   </style>
 </head>
 <body>
   <div id="prompt-modal" class="modal" aria-modal="true" role="dialog">
     <div class="panel">
       <div class="titleline" id="prompt-title">最初に自然言語でジャンル指定</div>
-      <div class="row">
-        <input id="prefInput" aria-labelledby="prompt-title" autocomplete="off" spellcheck="false" />
-      </div>
-      <button id="prefGhost" class="sr-only" type="button">OK</button>
+      <div class="row"><input id="prefInput" aria-labelledby="prompt-title" autocomplete="off" spellcheck="false" /></div>
     </div>
   </div>
 
@@ -55,7 +55,7 @@
     <button id="openBtn" class="btn">OPEN WIKI</button>
     <button id="backBtn" class="btn hidden">BACK</button>
 
-    <div class="small">v22.3.2</div>
+    <div class="small">v22.3.3</div>
   </div>
 
   <script src="script.v2232.js"></script>

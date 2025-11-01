@@ -1,6 +1,6 @@
 {
-  "name": "知のセイレーン（自然言語ジャンル指定・最小UI/Enter修正）",
-  "short_name": "SirenNL-EnterFix",
+  "name": "知のセイレーン（自然言語ジャンル指定・最小UI/枠はみ出し修正）",
+  "short_name": "SirenNL-Fit",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",
@@ -17,5 +17,5 @@
       "type": "image/png"
     }
   ],
-  "version": "22.3.2"
+  "version": "22.3.3"
 }
