@@ -1,6 +1,6 @@
 {
-  "name": "知のセイレーン（Wikipedia JSONP 版）",
-  "short_name": "SirenJSONP",
+  "name": "知のセイレーン（自然言語ジャンル指定）",
+  "short_name": "SirenNLGenre",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",
@@ -17,5 +17,5 @@
       "type": "image/png"
     }
   ],
-  "version": "22.2.0"
+  "version": "22.3.0"
 }
