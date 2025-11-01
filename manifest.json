@@ -1,6 +1,6 @@
 {
-  "name": "知のセイレーン（自然言語ジャンル指定・関連優先）",
-  "short_name": "SirenNL-Related",
+  "name": "知のセイレーン（関連ジャンル保証・最小UI）",
+  "short_name": "SirenNL-Rel6",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",
@@ -17,5 +17,5 @@
       "type": "image/png"
     }
   ],
-  "version": "22.3.5"
+  "version": "22.3.6"
 }
