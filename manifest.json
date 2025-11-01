@@ -1,6 +1,6 @@
 {
-  "name": "知のセイレーン（Wikipedia 人気版）",
-  "short_name": "SirenPop",
+  "name": "知のセイレーン（Wikipedia JSONP 版）",
+  "short_name": "SirenJSONP",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",
@@ -17,5 +17,5 @@
       "type": "image/png"
     }
   ],
-  "version": "22.1.1"
+  "version": "22.2.0"
 }
