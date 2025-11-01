@@ -1,6 +1,6 @@
 {
-  "name": "知のセイレーン v22.6.1（FINAL）",
-  "short_name": "Siren-2261F",
+  "name": "知のセイレーン v22.5.0（Lite）",
+  "short_name": "Siren-2250L",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",
@@ -17,5 +17,5 @@
       "type": "image/png"
     }
   ],
-  "version": "22.6.1-final"
+  "version": "22.5.0-lite"
 }
