@@ -1,6 +1,6 @@
 {
-  "name": "知のセイレーン（関連ジャンル保証・最小UI）",
-  "short_name": "SirenNL-Rel6",
+  "name": "知のセイレーン v22.3.7（遷移不具合ハード修正）",
+  "short_name": "Siren-2237",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",
@@ -17,5 +17,5 @@
       "type": "image/png"
     }
   ],
-  "version": "22.3.6"
+  "version": "22.3.7"
 }
