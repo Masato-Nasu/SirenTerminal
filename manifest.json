@@ -1,6 +1,6 @@
 {
-  "name": "知のセイレーン v22.6.4（Dual NEXT / Stream Related）",
-  "short_name": "Siren-2264DS",
+  "name": "知のセイレーン v22.6.5（Dual NEXT / Stream + Noise Filter）",
+  "short_name": "Siren-2265DNF",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",
@@ -17,5 +17,5 @@
       "type": "image/png"
     }
   ],
-  "version": "22.6.4-dualnext-stream"
+  "version": "22.6.5-dualnext-stream-nofuzzydates"
 }
