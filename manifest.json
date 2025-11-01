@@ -1,6 +1,6 @@
 {
-  "name": "知のセイレーン v22.6.0（Related-only + Reset）",
-  "short_name": "Siren-2260R",
+  "name": "知のセイレーン v22.6.2（Dual NEXT）",
+  "short_name": "Siren-2262DN",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",
@@ -17,5 +17,5 @@
       "type": "image/png"
     }
   ],
-  "version": "22.6.0-related"
+  "version": "22.6.2-dualnext"
 }
