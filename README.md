@@ -1,5 +1,5 @@
 Siren Terminal
-<p align="center"> <img src="assets/icon-512.png" width="160" alt="Siren Terminal icon" /> </p>
+<p align="center"> <img src="icon-512.png" width="160" alt="Siren Terminal icon" /> </p>
 🔗 実行ページ
 
 https://masato-nasu.github.io/SirenTerminal/
