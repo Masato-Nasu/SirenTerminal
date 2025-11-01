@@ -20,39 +20,19 @@
     .small{font-size:12px;color:#666;text-align:center;margin-top:6px}
     #altview{display:block;white-space:pre-wrap;line-height:1.7}
     .hidden{display:none}
-    /* prompt modal */
+
+    /* minimal modal */
     .modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.35);backdrop-filter:saturate(180%) blur(4px);}
     .panel{width:min(720px,92vw);background:#fff;border-radius:14px;border:1px solid #ddd;box-shadow:0 10px 30px rgba(0,0,0,.12);padding:18px}
-    .row{display:flex;gap:8px;margin-top:10px}
-    .row input{flex:1;padding:12px 14px;border:1px solid #bbb;border-radius:10px;font-size:14px}
-    .row button{padding:12px 16px;border:1px solid #333;background:#111;color:#fff;border-radius:10px}
-    .hint{font-size:12px;color:#666;margin-top:6px}
-    .pill{display:inline-block;border:1px solid #ddd;border-radius:999px;padding:6px 10px;margin:4px;background:#fafafa;font-size:12px}
-    .topbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-    .x{cursor:pointer;border:none;background:transparent;font-size:18px}
+    .titleline{font-weight:700;margin-bottom:10px}
+    .row input{width:100%;padding:12px 14px;border:1px solid #bbb;border-radius:10px;font-size:14px}
   </style>
 </head>
 <body>
   <div id="prompt-modal" class="modal">
     <div class="panel">
-      <div class="topbar">
-        <div><b>最初に自然言語でジャンル指定</b></div>
-        <button id="skipBtn" class="x" title="スキップ">×</button>
-      </div>
-      <div>例：「SF映画と現代哲学」「スポーツより兵器と戦車」「数学の幾何・解析、あとアニメ」など自由に。</div>
-      <div class="row">
-        <input id="prefInput" placeholder="ここに自由に入力（後から設定メニューで変更可）">
-        <button id="prefSave">OK</button>
-      </div>
-      <div class="hint">ヒント：以下からクリックしてもOK</div>
-      <div id="pillbox">
-        <span class="pill">アニメと漫画</span>
-        <span class="pill">哲学（現象学/分析哲学）</span>
-        <span class="pill">主力戦車と駆逐艦</span>
-        <span class="pill">数学（幾何と解析）</span>
-        <span class="pill">VTuberとゲーム音楽</span>
-        <span class="pill">古代史と宗教哲学</span>
-      </div>
+      <div class="titleline">最初に自然言語でジャンル指定</div>
+      <div class="row"><input id="prefInput" placeholder=""></div>
     </div>
   </div>
 
@@ -71,9 +51,9 @@
     <button id="openBtn" class="btn">OPEN WIKI</button>
     <button id="backBtn" class="btn hidden">BACK</button>
 
-    <div class="small">v22.3.0 (自然言語ジャンル指定 / JSONP / 先読みバッファ)</div>
+    <div class="small">v22.3.1</div>
   </div>
 
-  <script src="script.v2230.js"></script>
+  <script src="script.v2231.js"></script>
 </body>
 </html>
