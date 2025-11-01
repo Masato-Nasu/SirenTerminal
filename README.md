@@ -8,7 +8,7 @@ https://masato-nasu.github.io/SirenTerminal/
 スマートフォンでは「ホーム画面に追加」でインストールできます（オフライン動作可）。
 
 スクリーンショット
-<p align="center"> <img src="assets/screenshot.png" alt="Siren Terminal Screenshot" width="480" /> </p>
+<p align="center"> <img src="https://github.com/Masato-Nasu/SirenTerminal/blob/main/screenshot.png" alt="Siren Terminal Screenshot" width="480" /> </p>
 使い方（最短）
 
 画面が出たら NEXT（ランダム） を押します。
@@ -38,9 +38,9 @@ OPEN WIKI：該当のWikipediaページを新規タブで開く
 
 コツ
 
-「ランダムで新規 → 関連で散歩」を繰り返すと、偶然と必然のバランスで気持ちよく広がります。
+「ランダムで新規 → 関連で散歩」を繰り返すと、偶然と必然のバランスで広がります。
 
-似た話題が続いた場合は ランダム で流れを切り替えると良いです。
+似た話題が続いたら ランダム で流れを変えると◎
 
 困ったとき
 
@@ -55,8 +55,7 @@ Siren Terminal は、Wikipedia から抽出された“概念”を ランダム
 
 主な機能（実装メモ）
 
-NEXT（関連）＝ストリーム方式：
-押すたびにその場で 1件だけ 関連を導出（先読みなし）。
+NEXT（関連）＝ストリーム方式：押すたびにその場で 1件だけ 関連を導出（先読みなし）。
 優先順：Links → Prefix（前方一致） → Search。
 内部状態（インデックス／オフセット）を localStorage に保持し、少しずつズレながら連鎖。
 
@@ -67,9 +66,9 @@ NEXT（ランダム）：新しい起点（seed）を作り、その後の関連
 PWA対応：manifest.json / serviceWorker.js によりオフライン動作・強制更新。
 
 ファイル構成
-index.html         UI（入力欄 / ボタン / 詳細ビュー）
-script.js          コアロジック（ランダム／関連ストリーム／LRU／JSONPユーティリティ）
-manifest.json      PWA設定
-serviceWorker.js   キャッシュと更新制御
-assets/icon-*.png  アイコン
-assets/screenshot.png スクリーンショット
+index.html           UI（入力欄 / ボタン / 詳細ビュー）
+script.js            コアロジック（ランダム／関連ストリーム／LRU／JSONPユーティリティ）
+manifest.json        PWA設定
+serviceWorker.js     キャッシュと更新制御
+assets/icon-*.png    アイコン
+screenshot.png       スクリーンショット（上記URLで参照）
