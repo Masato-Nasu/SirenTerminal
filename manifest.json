@@ -1,6 +1,6 @@
 {
-  "name": "知のセイレーン v22.6.2（Dual NEXT）",
-  "short_name": "Siren-2262DN",
+  "name": "知のセイレーン v22.6.4（Dual NEXT / Stream Related）",
+  "short_name": "Siren-2264DS",
   "start_url": "./index.html",
   "display": "standalone",
   "background_color": "#ffffff",
@@ -17,5 +17,5 @@
       "type": "image/png"
     }
   ],
-  "version": "22.6.2-dualnext"
+  "version": "22.6.4-dualnext-stream"
 }
